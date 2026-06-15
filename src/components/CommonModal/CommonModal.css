@@ -1,0 +1,146 @@
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.3);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 99999;
+}
+
+.modal-container {
+  width: 400px;
+  background: #ffffff;
+  border: 1px solid #e5e5e3;
+  border-radius: 10px;
+  box-shadow:
+    0 10px 15px -3px rgba(0, 0, 0, 0.1),
+    0 4px 6px -4px rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+  font-family: 'Inter', system-ui, sans-serif;
+  animation: modal-pop 0.2s ease-out;
+}
+
+@keyframes modal-pop {
+  0% {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 24px 16px;
+}
+
+.modal-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.modal-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.modal-icon.success {
+  background: #ecfdf5;
+  color: #16a34a;
+}
+
+.modal-icon.warning {
+  background: #fff7ed;
+  color: #ea580c;
+}
+
+.modal-icon.error {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.modal-icon.info {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1a1a18;
+}
+
+.modal-body {
+  padding: 0 24px 20px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: #52524e;
+}
+
+.modal-footer {
+  padding: 14px 24px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid #e5e5e3;
+  background: #fafafa;
+}
+
+
+.modal-btn {
+  height: 32px;
+  padding: 0 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+
+.modal-btn-cancel {
+  background: white;
+  border: 1px solid #d1d5db;
+  color: #52524e;
+}
+
+.modal-btn-cancel:hover {
+  background: #f5f5f4;
+  color: #1a1a18;
+}
+
+.modal-btn-primary {
+  background: #18181b;
+  color: white;
+  border: none;
+}
+
+.modal-btn-primary:hover {
+  background: #3f3f46;
+}
+
+
+.modal-btn-danger {
+  background: #dc2626;
+  color: white;
+  border: none;
+}
+
+.modal-btn-danger:hover {
+  background: #b91c1c;
+}

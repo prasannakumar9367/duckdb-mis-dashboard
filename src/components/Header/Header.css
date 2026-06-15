@@ -1,0 +1,121 @@
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: #fff;
+  border-bottom: 1px solid #e5e5e3;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  flex-shrink: 0;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.header-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a18;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.header-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.header-tabs button {
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: #f3f4f6;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.header-tabs button.active {
+  background: #111827;
+  color: white;
+}
+
+.header-status {
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+
+.header-status.loading {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.header-status.ready {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.1s, opacity 0.1s;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.btn-ghost {
+  background: transparent;
+  border: 1px solid #e5e5e3;
+  color: #52524e;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: #f5f5f4;
+}
+
+.btn-primary {
+  background: #18181b;
+  border: 1px solid #18181b;
+  color: #fff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #3f3f46;
+}

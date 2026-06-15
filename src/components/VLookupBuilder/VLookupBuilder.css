@@ -1,0 +1,578 @@
+.vlb {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.vlb__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.vlb__header h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #111827;
+  letter-spacing: -0.02em;
+}
+
+.vlb__header p {
+  margin: 0;
+  font-size: 12.5px;
+  color: #52524e;
+  line-height: 1.5;
+}
+
+.vlb__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.vlb__body {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.vlb__controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.vlb__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+  .vlb-accordion {
+  background: #ffffff;
+  border: 1px solid #e5e5e3;
+  border-radius: 12px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.vlb-accordion__header {
+  width: 100%;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  background: #fafafa;
+  border: none;
+  border-bottom: 1px solid transparent;
+  color: #111827;
+  transition: background 0.15s ease;
+}
+
+.vlb-accordion__header:hover {
+  background: #f5f5f5;
+}
+
+.vlb-accordion__header--open {
+  border-bottom-color: #e5e5e3;
+}
+
+.vlb-accordion__badge {
+  font-size: 11px;
+  font-weight: 500;
+  color: #52524e;
+  background: #f4f4f5;
+  border: 1px solid #e4e4e7;
+  border-radius: 20px;
+  padding: 2px 8px;
+}
+
+.vlb-accordion__body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #ffffff;
+}
+
+.vlb-join-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.vlb-join-type {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.vlb-join-type label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #52524e;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.vlb-join-type select {
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid #d6d3d1;
+  background: #fbfbfb;
+  font-size: 12px;
+  outline: none;
+  color: #111827;
+  width: 100%;
+}
+
+.vlb-dropzone {
+  min-height: 58px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1.5px dashed #d1d5db;
+  background: #fafafa;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s, background 0.15s;
+  box-sizing: border-box;
+}
+
+.vlb-dropzone:hover {
+  border-color: #93c5fd;
+}
+
+.vlb-dropzone--over {
+  border-color: #2563eb;
+  border-style: solid;
+  background: #eff6ff;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.vlb-dropzone--filled {
+  border-style: solid;
+  background: #f9fafb;
+}
+
+.vlb-dropzone__label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.vlb-dropzone__placeholder {
+  font-size: 12px;
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.vlb-dropzone__chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  color: #1a1a18;
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.vlb-dropzone__chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vlb-dropzone__chip-clear {
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  flex-shrink: 0;
+  transition: color 0.1s;
+}
+
+.vlb-dropzone__chip-clear:hover {
+  color: #dc2626;
+}
+
+.vlb-sql-card {
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 380px;
+  max-height: 45vh;
+  min-height: 280px;
+}
+
+.vlb-sql-card__title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #52524e;
+  padding: 10px 14px 0;
+}
+
+.vlb-sql-card__editor {
+  flex: 1;
+  min-height: 0;
+}
+
+.vlb-sql-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.vlb-status-dots {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  margin-left: auto;
+}
+
+.vlb-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #d1d5db;
+  transition: background 0.2s;
+}
+
+.vlb-dot--on {
+  background: #22c55e;
+}
+
+.vlb-where-row {
+ display: flex;
+ flex-direction: column;
+ gap:8px;
+  width: 100%;
+}
+
+.vlb-where-row__column {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.vlb-where-row__column label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #52524e;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.vlb-where-row__operator {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.vlb-where-row__operator label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #52524e;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.vlb-where-row__operator select {
+  padding: 7px 8px;
+  border-radius: 6px;
+  border: 1px solid #d6d3d1;
+  background: #fbfbfb;
+  font-size: 11px;
+  outline: none;
+  color: #111827;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.vlb-where-row__value {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.vlb-where-row__value label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #52524e;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.vlb-where-row__value input {
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid #d6d3d1;
+  background: #fbfbfb;
+  font-size: 11px;
+  outline: none;
+  color: #111827;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.vlb-where-row__value input:disabled {
+  opacity: 0.5;
+  background: #f5f5f5;
+}
+
+.vlb-where-row__connector {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.vlb-where-row__connector label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #52524e;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.vlb-where-row__connector select {
+  padding: 7px 8px;
+  border-radius: 6px;
+  border: 1px solid #d6d3d1;
+  background: #fbfbfb;
+  font-size: 11px;
+  outline: none;
+  color: #111827;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.vlb-where-row__actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.vlb-where-row__actions button {
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 5px;
+  border: 1px solid #d6d3d1;
+  background: #f4f4f5;
+  color: #18181b;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+}
+
+.vlb-where-row__actions button:hover:not(:disabled) {
+  background: #e4e4e7;
+}
+
+.vlb-where-row__actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.vlb-where-empty {
+  font-size: 12px;
+  color: #a8a7a2;
+  padding: 8px 0;
+  text-align: center;
+  font-style: italic;
+}
+
+/* ── Buttons ── */
+.vlb-btn {
+  border: none;
+  border-radius: 6px;
+  padding: 0 12px;
+  height: 30px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  box-sizing: border-box;
+}
+
+.vlb-btn--primary {
+  background: #18181b;
+  color: #ffffff;
+}
+
+.vlb-btn--primary:hover:not(:disabled) {
+  background: #3f3f46;
+}
+
+.vlb-btn--secondary {
+  background: #f4f4f5;
+  color: #18181b;
+  border: 1px solid #e4e4e7;
+}
+
+.vlb-btn--secondary:hover:not(:disabled) {
+  background: #e4e4e7;
+}
+
+.vlb-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── Responsive ── */
+@media (max-width: 960px) {
+  .vlb__body {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+
+  .vlb__controls,
+  .vlb__preview {
+    overflow-y: visible;
+    height: auto;
+  }
+
+  .vlb {
+    overflow: auto;
+  }
+}
+
+/* Automation Status Pop-up Alert Containers */
+.vlb-automation-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: 6px;
+  margin-top: 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  animation: slideDownIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  position: relative;
+}
+
+.vlb-automation-banner.success {
+  background-color: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+}
+
+.vlb-automation-banner.error {
+  background-color: #fef2f2;
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+}
+
+.vlb-automation-banner.loading {
+  background-color: #f0f9ff;
+  border: 1px solid #bae6fd;
+  color: #075985;
+}
+
+.banner-dismiss {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.7;
+}
+.banner-dismiss:hover {
+  opacity: 1;
+}
+
+.vlb-grid-card {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.vlb-ag-grid-container {
+  width: 100%;
+  margin-top: 12px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+}
+
+.vlb-ag-grid-container .ag-root-wrapper {
+  border-radius: 4px;
+}
+
+@keyframes slideDownIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.vlb-sql-card-wrapper {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  transition: border-color 0.15s ease;
+}
+
+.vlb-sql-card-wrapper:focus-within {
+  border-color: #3b82f6 !important;
+}
+
+.vlb-cell-bar button:hover:not(:disabled) {
+  background: #3f3f46 !important;
+}
+
+.vlb-cell-bar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

@@ -1,0 +1,136 @@
+.loader-overlay-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 400px;
+  background-color: #ffffff;
+  box-sizing: border-box;
+  padding: 24px;
+}
+
+.loader-telemetry-box {
+  width: 100%;
+  max-width: 640px;
+  background: #ffffff;
+  border: 1px solid #e5e5e3;
+  border-radius: 6px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  text-align: left;
+}
+
+.telemetry-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.telemetry-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #18181b;
+}
+
+.telemetry-bytes {
+  font-size: 11px;
+  font-weight: 500;
+  color: #71717a;
+  letter-spacing: 0.02em;
+}
+
+.telemetry-progress-track {
+  width: 100%;
+  height: 4px;
+  background-color: #f4f4f5;
+  border-radius: 20px;
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+
+.telemetry-progress-fill {
+  height: 100%;
+  background-color: #2563eb;
+  border-radius: 20px;
+  transition: width 0.08s ease-out;
+  box-shadow: 0 0 8px rgba(37, 99, 235, 0.4);
+}
+
+.telemetry-log-terminal {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 110px;
+}
+
+.terminal-log-line {
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.4;
+  animation: linePromptSlide 0.15s ease-out;
+}
+
+@keyframes linePromptSlide {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.line-timestamp {
+  color: #a1a1aa;
+}
+
+.line-status-symbol {
+  font-weight: bold;
+}
+
+.line-done {
+  color: #71717a;
+}
+.line-done .line-status-symbol {
+  color: #16a34a;
+}
+
+.line-active {
+  color: #18181b;
+  font-weight: 500;
+}
+.line-active .line-status-symbol {
+  color: #2563eb;
+  animation: textBlinkPulse 1s infinite steps(2, start);
+}
+
+@keyframes textBlinkPulse {
+  to { visibility: hidden; }
+}
+
+.telemetry-critical-error {
+  margin-top: 16px;
+  background-color: #fef2f2;
+  border: 1px solid #fee2e2;
+  border-radius: 4px;
+  padding: 12px;
+}
+
+.telemetry-critical-error h5 {
+  margin: 0 0 6px 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: #dc2626;
+}
+
+.telemetry-critical-error pre {
+  margin: 0;
+  font-family: inherit;
+  font-size: 11px;
+  color: #991b1b;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
