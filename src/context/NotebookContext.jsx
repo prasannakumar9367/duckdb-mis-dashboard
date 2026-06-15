@@ -12,6 +12,7 @@ import {
   registerBufferAndCreateTable,
   fileNameToTable,
   runQuery,
+  runMutation,
   dropTable,
 } from "../services/duckdbService";
 import pivotTransform from "../utils/pivotTransform";
@@ -34,18 +35,19 @@ const DEFAULT_CELLS = [
 const NotebookContext = createContext(null);
 
 export function NotebookProvider({ children }) {
-  const [dbReady,       setDbReady]       = useState(false);
-  const [dbError,       setDbError]       = useState(null);
-  const [restoring,     setRestoring]     = useState(true);
-  const [uploadingFiles,setUploadingFiles] = useState(false);
+  const [dbReady, setDbReady] = useState(false);
+  const [dbError, setDbError] = useState(null);
+  const [restoring, setRestoring] = useState(true);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
 
-  const [files,  setFiles]  = useState([]);    
+  const [files, setFiles] = useState([]);    
   const [tables, setTables] = useState([]);    
-  const [cells,  setCells]  = useState(DEFAULT_CELLS);
+  const [cells, setCells] = useState(DEFAULT_CELLS);
   const [pivotConfig, setPivotConfig] = useState(null);
 
   const debounceTimer = useRef(null);
 
+  // ─── WORKSPACE REHYDRATION LIFECYCLE ──────────────────────────────────────
   useEffect(() => {
     async function bootstrap() {
       try {
@@ -58,7 +60,7 @@ export function NotebookProvider({ children }) {
       }
 
       try {
-        const storedCSVs     = await loadAllCSVBuffers();
+        const storedCSVs = await loadAllCSVBuffers();
         const restoredTables = [];
 
         const savedFilesList = await loadState("files"); 
@@ -110,6 +112,7 @@ export function NotebookProvider({ children }) {
     bootstrap();
   }, []);
 
+  // ─── STATE STORAGE PERSISTENCE ─────────────────────────────────────────────
   const persistCells = useCallback((updatedCells) => {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
@@ -120,10 +123,11 @@ export function NotebookProvider({ children }) {
     }, 400);
   }, []);
 
+  // ─── HIGH PERFORMANCE FILE UPLOAD HANDLER ──────────────────────────────────
   const handleUpload = useCallback(async (fileList) => {
     setUploadingFiles(true);
     try {
-      const newFiles  = [];
+      const newFiles = [];
       const newTables = [];
 
       for (const file of Array.from(fileList)) {
@@ -158,9 +162,21 @@ export function NotebookProvider({ children }) {
     }
   }, []);
 
+  // ─── SAFE NOTEBOOK CELL QUERY RUNNER ───────────────────────────────────────
   const executeQuery = useCallback(async (cellId, sql) => {
-    const rows = await runQuery(sql); 
+    let targetSql = sql.trim();
+
+    // 🎯 SAFETY PROTECTION: Auto-append LIMIT on large SELECT queries if missing
+    // This stops standard workspace sheets/notebook cells from crashing on 14+ Lakh rows.
+    const isSelect = /^select\s/i.test(targetSql);
+    const hasLimit = /\slimit\s+\d+/i.test(targetSql);
+    if (isSelect && !hasLimit) {
+      targetSql = `${targetSql.replace(/;+$/, "")} LIMIT 1000;`;
+    }
+
+    const rows = await runQuery(targetSql); 
     let finalRows = rows;
+    
     try {
       if (
         pivotConfig &&
@@ -252,13 +268,15 @@ export function NotebookProvider({ children }) {
     });
   }, [persistCells]);
 
+  // ─── WORKSPACE FILE & TABLE DELETIONS ──────────────────────────────────────
   const deleteFile = useCallback(async (fileNameOrObj) => {
     const name = typeof fileNameOrObj === "string" ? fileNameOrObj : fileNameOrObj.name;
     await deleteCSVBuffer(name).catch(() => {});
     try {
       const tableName = fileNameToTable(name);
       await dropTable(tableName).catch(() => {});
-    } catch {
+    } catch (err) {
+      console.error("Failed to drop table during file removal:", err);
     }
 
     setFiles((prev) => {
@@ -291,7 +309,8 @@ export function NotebookProvider({ children }) {
           });
         }
       }
-    } catch {
+    } catch (err) {
+      console.error("Clean storage table match removal failed:", err);
     }
 
     setTables((prev) => {
@@ -317,13 +336,23 @@ export function NotebookProvider({ children }) {
   return (
     <NotebookContext.Provider
       value={{
-        dbReady, dbError, restoring,
-        files, tables, uploadingFiles,
+        dbReady,
+        dbError,
+        restoring,
+        files,
+        tables,
+        uploadingFiles,
         cells,
         handleUpload,
-        executeQuery, updateCellError,
-        addCell, deleteCell, duplicateCell, updateCellQuery,
-        deleteFile, deleteTable,
+        executeQuery,
+        runMutation, // Cleanly mapped static database kernel reference pass
+        updateCellError,
+        addCell,
+        deleteCell,
+        duplicateCell,
+        updateCellQuery,
+        deleteFile,
+        deleteTable,
         clearAll,
         recordHistory,
         registerPivotConfig,

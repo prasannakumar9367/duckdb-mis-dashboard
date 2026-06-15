@@ -53,28 +53,38 @@ export function useVLookupSql({
         return `-- Still needed for Update Master: ${missing.join(", ")}`;
       }
 
+      // ── 🎯 FIXED: Removed "target." prefix from the left-hand side column definition ──
       const updateSetSql = returns
         .map((f) => `    ${quoteIdentifier(f.column)} = source.${quoteIdentifier(f.column)}`)
         .join(",\n");
 
-      const insertTargetCols = [targetKey, ...returns.map(f => f.column)]
+      const insertTargetCols = [targetKey, ...returns.map((f) => f.column)]
         .map(quoteIdentifier)
         .join(", ");
 
-      const insertSourceVals = [sourceKey, ...returns.map(f => f.column)]
-        .map((c) => `source.${quoteIdentifier(c)}`)
+      const selectSourceCols = [sourceKey, ...returns.map((f) => f.column)]
+        .map(quoteIdentifier)
         .join(", ");
 
+      // Generates sequential transactional statements separated by semicolons.
       return [
-        `MERGE INTO ${quoteIdentifier(targetTable)} AS target`,
-        `USING ${quoteIdentifier(sourceTable)} AS source`,
-        `ON target.${quoteIdentifier(targetKey)} = source.${quoteIdentifier(sourceKey)}`,
-        `WHEN MATCHED THEN`,
-        `  UPDATE SET`,
+        `-- STEP 1: Fast Inline Memory Row Updates for matched items`,
+        `UPDATE ${quoteIdentifier(targetTable)} AS target`,
+        `SET`,
         updateSetSql,
-        `WHEN NOT MATCHED THEN`,
-        `  INSERT (${insertTargetCols})`,
-        `  VALUES (${insertSourceVals});`,
+        `FROM ${quoteIdentifier(sourceTable)} AS source`,
+        `WHERE target.${quoteIdentifier(targetKey)} = source.${quoteIdentifier(sourceKey)};`,
+        `\n-- STEP 2: Stream missing records into a temporary indexing structure`,
+        `CREATE TEMP TABLE temp_vlookup_new_records AS `,
+        `SELECT source.* FROM ${quoteIdentifier(sourceTable)} AS source`,
+        `LEFT JOIN ${quoteIdentifier(targetTable)} AS target`,
+        `  ON source.${quoteIdentifier(sourceKey)} = target.${quoteIdentifier(targetKey)}`,
+        `WHERE target.${quoteIdentifier(targetKey)} IS NULL;`,
+        `\n-- STEP 3: Streaming append transaction block from staging table using split columns mapping`,
+        `INSERT INTO ${quoteIdentifier(targetTable)} (${insertTargetCols})`,
+        `SELECT ${selectSourceCols} FROM temp_vlookup_new_records;`,
+        `\n-- STEP 4: Immediately release internal allocations back to browser workspace`,
+        `DROP TABLE temp_vlookup_new_records;`
       ].join("\n");
     }
 

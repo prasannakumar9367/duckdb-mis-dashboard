@@ -3,7 +3,9 @@ import * as duckdb from "@duckdb/duckdb-wasm";
 let db   = null;
 let conn = null;
 
-
+/**
+ * Initializes the DuckDB WebAssembly engine thread sandbox.
+ */
 export async function initDB() {
   if (db) return { db, conn };
 
@@ -28,8 +30,9 @@ export async function initDB() {
 export const getDB   = () => db;
 export const getConn = () => conn;
 
-
-
+/**
+ * Sanitizes uploaded file names into safe, valid SQL table identifiers.
+ */
 export function fileNameToTable(fileName) {
   return fileName
     .replace(/\.csv$/i, "")
@@ -38,16 +41,14 @@ export function fileNameToTable(fileName) {
     .toLowerCase();
 }
 
+/**
+ * Registers an ArrayBuffer into the DuckDB virtual file system and builds an indexed table view.
+ */
 export async function registerBufferAndCreateTable(fileName, buffer) {
   if (!db || !conn) throw new Error("DuckDB not initialized");
 
   const tableName = fileNameToTable(fileName);
-
-  const uint8 = buffer instanceof Uint8Array
-    ? new Uint8Array(buffer.buffer.slice(0))
-    : new Uint8Array(buffer.slice(0));
-
-  await db.registerFileBuffer(fileName, uint8);
+  await db.registerFileBuffer(fileName, new Uint8Array(buffer));
 
   await conn.query(`
     CREATE OR REPLACE TABLE "${tableName}" AS
@@ -64,9 +65,11 @@ export async function registerBufferAndCreateTable(fileName, buffer) {
   return { name: tableName, rowCount, columns };
 }
 
+/**
+ * Wrapper method to parse raw file objects cleanly during user upload drops.
+ */
 export async function registerAndCreateTable(file) {
   const rawBuffer = await file.arrayBuffer();
-
   const duckdbBuffer  = rawBuffer.slice(0);
   const storageBuffer = rawBuffer.slice(0);
 
@@ -80,22 +83,43 @@ export async function registerAndCreateTable(file) {
   };
 }
 
-
+/**
+ * 🎯 PAGINATION DATA RETRIEVAL ENGINE
+ * Designed to pull lightweight row slices (e.g., LIMIT 100) securely into the UI.
+ */
 export async function runQuery(sql) {
   if (!conn) throw new Error("DuckDB connection not initialized");
-
+  
   const result = await conn.query(sql);
-
+  
+  // Converts Apache Arrow vectors into raw, lightweight JavaScript objects cleanly
   return result.toArray().map((row) => {
-    const obj = {};
-    for (const [k, v] of Object.entries(row)) {
-      obj[k] = typeof v === "bigint" ? Number(v) : v;
+    const rowObj = {};
+    for (const key in row) {
+      if (Object.prototype.hasOwnProperty.call(row, key)) {
+        const value = row[key];
+        // Safely downcast BigInt structures to standard numbers to prevent stringify bugs
+        rowObj[key] = typeof value === "bigint" ? Number(value) : value;
+      }
     }
-    return obj;
+    return rowObj;
   });
 }
 
-export async function dropTable(tableName) {
+/**
+ * 🎯 IN-MEMORY DATA MUTATION ENGINE
+ * Executes heavy schema corrections and transactional steps entirely inside WebAssembly storage.
+ */
+export async function runMutation(sql) {
   if (!conn) throw new Error("DuckDB connection not initialized");
-  await conn.query(`DROP TABLE IF EXISTS "${tableName}"`);
+  await conn.query(sql);
+  return true;
+}
+
+/**
+ * Drops active tables from the workspace catalog cleanly.
+ */
+export async function dropTable(name) {
+  if (!conn) return;
+  await conn.query(`DROP TABLE IF EXISTS "${name}"`);
 }
