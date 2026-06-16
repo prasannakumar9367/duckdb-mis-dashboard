@@ -14,6 +14,7 @@ import {
   runQuery,
   runMutation,
   dropTable,
+  getTableCSVBuffer,
 } from "../services/duckdbService";
 import pivotTransform from "../utils/pivotTransform";
 
@@ -40,6 +41,10 @@ export function NotebookProvider({ children }) {
   const [restoring, setRestoring] = useState(true);
   const [uploadingFiles, setUploadingFiles] = useState(false);
 
+  // ── 🎯 REAL-TIME LOCAL BYTE UPLOAD PROGRESS TRACKING STATES ────────────────
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState("");
+
   const [files, setFiles] = useState([]);    
   const [tables, setTables] = useState([]);    
   const [cells, setCells] = useState(DEFAULT_CELLS);
@@ -52,7 +57,6 @@ export function NotebookProvider({ children }) {
     async function bootstrap() {
       try {
         await initDB();
-        setDbReady(true);
       } catch (e) {
         setDbError(e.message);
         setRestoring(false);
@@ -64,14 +68,18 @@ export function NotebookProvider({ children }) {
         const restoredTables = [];
 
         const savedFilesList = await loadState("files"); 
+        
+        // ── 🎯 FIXED: Map allowed items to standardized table tokens to eliminate case mismatches ──
         const allowedNames = new Set(
           Array.isArray(savedFilesList)
-            ? savedFilesList.map((f) => (typeof f === "string" ? f : f.name))
+            ? savedFilesList.map((f) => fileNameToTable(typeof f === "string" ? f : f.name))
             : []
         );
 
+        // Re-populate all database memory tables before unlocking the UI interface view
         for (const { name, buffer } of storedCSVs) {
-          if (allowedNames.size > 0 && !allowedNames.has(name)) {
+          const tableKey = fileNameToTable(name);
+          if (allowedNames.size > 0 && !allowedNames.has(tableKey)) {
             console.warn(`[restore] Skipping orphaned CSV buffer "${name}"`);
             continue;
           }
@@ -102,8 +110,11 @@ export function NotebookProvider({ children }) {
         if (Array.isArray(savedCells) && savedCells.length > 0) {
           setCells(savedCells);
         }
+        
+        setDbReady(true);
       } catch (err) {
         console.warn("[restore] IndexedDB restore failed:", err);
+        setDbReady(true); 
       } finally {
         setRestoring(false);
       }
@@ -123,51 +134,103 @@ export function NotebookProvider({ children }) {
     }, 400);
   }, []);
 
-  // ─── HIGH PERFORMANCE FILE UPLOAD HANDLER ──────────────────────────────────
+  // ─── HIGH-PERFORMANCE PROGRESSIVE FILE INGESTION CONTROLLER ────────────────
   const handleUpload = useCallback(async (fileList) => {
     setUploadingFiles(true);
+    setUploadProgress(0);
+    setUploadStatus("Initializing local stream...");
+    
     try {
       const newFiles = [];
       const newTables = [];
 
       for (const file of Array.from(fileList)) {
-        const { tableName, rowCount, columns, storageBuffer } =
-          await registerAndCreateTable(file);
+        const rawBuffer = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          
+          reader.onprogress = (event) => {
+            if (event.lengthComputable) {
+              const percentage = Math.round((event.loaded / event.total) * 100);
+              setUploadProgress(Math.min(percentage, 99));
+              setUploadStatus(`Reading bytes: ${percentage}%`);
+            }
+          };
 
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsArrayBuffer(file);
+        });
+
+        setUploadProgress(99);
+        setUploadStatus("DuckDB allocating schemas & counting indexing limits...");
+        await new Promise((r) => setTimeout(r, 60));
+
+        const duckdbBuffer  = rawBuffer.slice(0);
+        const storageBuffer = rawBuffer.slice(0);
+
+        const meta = await registerBufferAndCreateTable(file.name, duckdbBuffer);
         await saveCSVBuffer(file.name, storageBuffer);
 
         newFiles.push({ id: Date.now() + Math.random(), name: file.name });
-        newTables.push({ name: tableName, rowCount, columns });
+        newTables.push({ name: meta.name, rowCount: meta.rowCount, columns: meta.columns });
       }
 
+      setUploadProgress(100);
+      setUploadStatus("Ingestion complete!");
+      await new Promise((r) => setTimeout(r, 350));
+
       setFiles((prev) => {
-        const merged = [...prev, ...newFiles];
+        const incomingNames = new Set(newFiles.map((f) => f.name));
+        const cleanPrev = prev.filter((f) => !incomingNames.has(typeof f === "string" ? f : f.name));
+        const merged = [...cleanPrev, ...newFiles];
         saveState("files", merged).catch(() => {});
         return merged;
       });
 
       setTables((prev) => {
-        const existingNames = new Set(prev.map((t) => t.name));
-        const merged = [
-          ...prev,
-          ...newTables.filter((t) => !existingNames.has(t.name)),
-        ];
+        const incomingNames = new Set(newTables.map((t) => t.name));
+        const cleanPrev = prev.filter((t) => !incomingNames.has(t.name));
+        const merged = [...cleanPrev, ...newTables];
         saveState("tables", merged).catch(() => {});
         return merged;
       });
+
     } catch (err) {
       console.error("[upload] Error:", err);
+      setUploadStatus("Ingestion failed.");
+      alert(`File processing aborted: ${err.message || String(err)}`);
     } finally {
       setUploadingFiles(false);
+      setUploadProgress(0);
+      setUploadStatus("");
     }
   }, []);
+
+  // ─── LONG-TERM WORKSPACE PERSISTENCE HOOK ────────────────────────────────
+  const persistTableChanges = useCallback(async (tableName) => {
+    try {
+      const savedFiles = await loadState("files") || files;
+      
+      // ── 🎯 FIXED: Case-insensitive token lookup maps original filename case structures correctly ──
+      const match = savedFiles.find((f) => {
+        const nameStr = typeof f === "string" ? f : f.name;
+        return fileNameToTable(nameStr) === tableName.toLowerCase().trim();
+      });
+
+      const fileName = match ? (typeof match === "string" ? match : match.name) : `${tableName}.csv`;
+      const updatedBuffer = await getTableCSVBuffer(tableName);
+
+      await saveCSVBuffer(fileName, updatedBuffer);
+      console.log(`[Storage Link] Permanently saved updates for table: ${tableName} under file: ${fileName}`);
+    } catch (err) {
+      console.error("Context long term synchronization write failed:", err);
+    }
+  }, [files]);
 
   // ─── SAFE NOTEBOOK CELL QUERY RUNNER ───────────────────────────────────────
   const executeQuery = useCallback(async (cellId, sql) => {
     let targetSql = sql.trim();
 
-    // 🎯 SAFETY PROTECTION: Auto-append LIMIT on large SELECT queries if missing
-    // This stops standard workspace sheets/notebook cells from crashing on 14+ Lakh rows.
     const isSelect = /^select\s/i.test(targetSql);
     const hasLimit = /\slimit\s+\d+/i.test(targetSql);
     if (isSelect && !hasLimit) {
@@ -342,10 +405,13 @@ export function NotebookProvider({ children }) {
         files,
         tables,
         uploadingFiles,
+        uploadProgress, 
+        uploadStatus,   
         cells,
         handleUpload,
         executeQuery,
-        runMutation, // Cleanly mapped static database kernel reference pass
+        runMutation, 
+        persistTableChanges, 
         updateCellError,
         addCell,
         deleteCell,
@@ -354,7 +420,7 @@ export function NotebookProvider({ children }) {
         deleteFile,
         deleteTable,
         clearAll,
-        recordHistory,
+        recordHistory, 
         registerPivotConfig,
         pivotConfig,
       }}

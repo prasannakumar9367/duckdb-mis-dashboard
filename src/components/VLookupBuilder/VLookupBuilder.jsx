@@ -88,14 +88,6 @@ function quoteIdentifier(value) {
   return `"${String(value).replace(/"/g, '""')}"`;
 }
 
-function toPlainSql(sql) {
-  try {
-    return JSON.parse(JSON.stringify({ sql })).sql;
-  } catch {
-    return sql;
-  }
-}
-
 // ─── STYLED COMPACT DROP ZONE ────────────────────────────────────────────────
 function BuilderDropZone({
   id,
@@ -150,17 +142,13 @@ function BuilderDropZone({
 
 // ─── REDUCED MONACO CODE WRAPPER ─────────────────────────────────────────────
 function CompactSqlEditor({ value, onChange }) {
-  const editorRef = useRef(null);
   return (
     <Editor
       height="140px"
       language="sql"
-      value={toPlainSql(value)}
+      value={value}
       onChange={onChange}
       theme="vs-light"
-      onMount={(editor) => {
-        editorRef.current = editor;
-      }}
       options={{
         minimap: { enabled: false },
         fontSize: 12,
@@ -191,6 +179,7 @@ export default function VLookupBuilder({
   setWhereConditions,
   runQuery,
   runMutation,
+  persistTableChanges, 
   autoExecuteTrigger,
 }) {
   const [whereOpen, setWhereOpen] = useState(false);
@@ -208,6 +197,11 @@ export default function VLookupBuilder({
   const [searchText, setSearchText] = useState("");
   const gridApiRef = useRef(null);
 
+  // ── 🎯 REAL-TIME CHROMIUM BROWSER STYLE METRIC STATES ─────────────────────
+  const [exportProgress, setExportProgress] = useState(0);
+  const [exportStatusText, setExportStatusText] = useState("");
+  const [exportFileName, setExportFileName] = useState("");
+
   // ── 🎯 REF POINTER HOOK CONTAINER TO DECOUPLE RE-RENDER LOOPS ──────────────
   const gridParamsRef = useRef({});
 
@@ -221,7 +215,7 @@ export default function VLookupBuilder({
   const sourceKey = safeLookups[0]?.column || null;
   const targetKey = safeMatches[0]?.column || null;
 
-  // Dynamically sync arguments on every cycle without creating new closures
+  // Sync latest arguments seamlessly inside the tracking ref object box
   gridParamsRef.current = {
     searchText,
     columnOrder,
@@ -300,74 +294,137 @@ export default function VLookupBuilder({
     }));
   }, [columnOrder]);
 
-const handleGridExport = async (type) => {
+  // ── 🎯 HIGH FREQUENCY CHROMIUM DOWNLOAD ENGINE FOR 14+ LAKH ROWS ───────────
+  const handleGridExport = async (type) => {
     const activeTable = targetTable || cachedTableName;
     if (!runQuery || !activeTable) return;
 
     try {
-      // 1. Enter running state to update button UI indicators
-      setRunStatus("running"); 
-
       const totalRows = totalRowCount && totalRowCount > 0 ? totalRowCount : 0;
       if (totalRows === 0) {
-        setRunStatus(null);
         alert("No records found in database to export.");
         return;
       }
 
-      // ── 🎯 CHUNK budget CONFIGURATION ──────────────────────────────────────
-      const CHUNK_SIZE = 50000; // Safe memory chunk to ensure WASM malloc never crashes
-      let allFormattedRows = [];
+      if (type === "excel" && totalRows > 150000) {
+        alert(`The selected dataset contains ${totalRows.toLocaleString()} rows. Client-side Excel compilation will run out of browser heap space. Please use the high-performance "⬇ CSV" option instead.`);
+        return;
+      }
+
+      const fileBase = String(activeTable).trim().replace(/[^a-zA-Z0-9_]/gi, "_");
+      const currentName = `${fileBase}_full_dataset.${type === "csv" ? "csv" : "xlsx"}`;
+      
+      setExportFileName(currentName);
+      setRunStatus("exporting"); 
+      setExportProgress(0);
+      setExportStatusText("Calculating stream footprint...");
+
+      const CHUNK_SIZE = 50000; 
+      let csvContentParts = []; 
+      let allExcelRows = []; 
       let cols = columnOrder.length > 0 ? columnOrder : [];
 
-      // 2. PROGRESSIVE LOOP STREAM TO EXTRACT OVER 10 LAKH ROWS SAFELY
+      const escapeCsvCell = (val) => {
+        if (val === null || val === undefined) return "";
+        const str = String(val);
+        if (str.includes('"') || str.includes(',') || str.includes('\n') || str.includes('\r')) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      };
+
+      const startTime = Date.now();
+
       for (let offset = 0; offset < totalRows; offset += CHUNK_SIZE) {
-        
-        // Explicitly supply LIMIT and OFFSET to bypass your global interceptor safely
         const chunkSql = `SELECT * FROM ${quoteIdentifier(activeTable)} LIMIT ${CHUNK_SIZE} OFFSET ${offset};`;
-        
         const chunkDataset = await runQuery(chunkSql);
         const parsedChunkRows = Array.isArray(chunkDataset) ? chunkDataset : [];
 
         if (parsedChunkRows.length === 0) break;
 
-        // Extract metadata header keys on the very first loop pass if uninitialized
         if (cols.length === 0 && parsedChunkRows.length > 0) {
           cols = Object.keys(parsedChunkRows[0] || {});
         }
 
-        // Map values immediately to standard primitives to free up WebAssembly row structures
-        for (let i = 0; i < parsedChunkRows.length; i++) {
-          const row = parsedChunkRows[i];
-          const cleanRow = {};
-          
-          for (let j = 0; j < cols.length; j++) {
-            const col = cols[j];
-            const val = row[col];
-            // Format dates/numbers safely and translate DB Null pointers to clean spaces
-            cleanRow[col] = val === null || val === undefined ? "" : String(val);
+        if (type === "csv") {
+          if (offset === 0) {
+            csvContentParts.push(cols.map(c => escapeCsvCell(c)).join(",") + "\n");
           }
-          
-          allFormattedRows.push(cleanRow);
+
+          let chunkTextAccumulator = "";
+          for (let i = 0; i < parsedChunkRows.length; i++) {
+            const row = parsedChunkRows[i];
+            const lineCells = [];
+            for (let j = 0; j < cols.length; j++) {
+              lineCells.push(escapeCsvCell(row[cols[j]]));
+            }
+            chunkTextAccumulator += lineCells.join(",") + "\n";
+          }
+          csvContentParts.push(chunkTextAccumulator);
+        } else {
+          for (let i = 0; i < parsedChunkRows.length; i++) {
+            const row = parsedChunkRows[i];
+            const cleanRow = {};
+            for (let j = 0; j < cols.length; j++) {
+              const col = cols[j];
+              cleanRow[col] = row[col] === null || row[col] === undefined ? "" : String(row[col]);
+            }
+            allExcelRows.push(cleanRow);
+          }
         }
+
+        const processedRows = Math.min(offset + CHUNK_SIZE, totalRows);
+        const currentPercentage = Math.min(Math.round((processedRows / totalRows) * 100), 100);
+        
+        const accumulatedBytes = type === "csv" 
+          ? csvContentParts.reduce((sum, chunk) => sum + chunk.length, 0)
+          : allExcelRows.length * cols.length * 12; 
+        
+        const elapsedSeconds = (Date.now() - startTime) / 1000;
+        const bytesPerSecond = elapsedSeconds > 0 ? accumulatedBytes / elapsedSeconds : 0;
+        
+        const currentMB = (accumulatedBytes / (1024 * 1024)).toFixed(1);
+        const estimatedTotalBytes = (accumulatedBytes / processedRows) * totalRows;
+        const totalMB = (estimatedTotalBytes / (1024 * 1024)).toFixed(1);
+        const mbPerSecond = (bytesPerSecond / (1024 * 1024)).toFixed(1);
+        
+        const remainingSeconds = bytesPerSecond > 0 
+          ? Math.max(0, Math.round((estimatedTotalBytes - accumulatedBytes) / bytesPerSecond)) 
+          : 0;
+
+        setExportProgress(currentPercentage);
+        
+        if (currentPercentage < 100) {
+          setExportStatusText(
+            `${mbPerSecond} MB/s - ${currentMB} MB of ${totalMB} MB, ${remainingSeconds} secs left`
+          );
+        } else {
+          setExportStatusText("Finishing download compilation...");
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
       }
 
-      if (allFormattedRows.length === 0) {
-        setRunStatus(null);
-        alert("No records were successfully compiled during dataset download extraction.");
-        return;
-      }
-
-      // 3. Generate structured file descriptors
-      const fileBase = String(activeTable).trim().toLowerCase().replace(/[^a-z0-9_]/gi, "_");
+      await new Promise((r) => setTimeout(r, 150));
       const timestamp = new Date().toISOString().slice(0, 10);
       const fileName = `${fileBase}_full_dataset_${timestamp}`;
 
-      // 4. Send the consolidated compiled row matrix directly to downloading utilities
       if (type === "csv") {
-        exportCSV(allFormattedRows, `${fileName}.csv`);
+        const blob = new Blob(csvContentParts, { type: "text/csv;charset=utf-8;" });
+        csvContentParts = []; 
+
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", `${fileName}.csv`);
+        link.style.visibility = "hidden";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
       } else if (type === "excel") {
-        exportExcel(allFormattedRows, `${fileName}.xlsx`);
+        exportExcel(allExcelRows, `${fileName}.xlsx`);
+        allExcelRows = []; 
       }
       
       setRunStatus("success");
@@ -377,16 +434,25 @@ const handleGridExport = async (type) => {
       alert(`Export processing halted: ${err.message || String(err)}`);
     }
   };
-  // ── 🎯 BATCHED MEMORY MUTATION TRANSACTION RUNNER ─────────────────────────
-  const handleRunUpdate = async () => {
+
+  // ─── 🎯 REAL TRANSACTION SYNC RUNNER ENGINE ──────────────────────────────
+  const handleRunUpdate = async (explicitSql) => {
     if (!runQuery || !runMutation || !canRunUpdate) return;
     setRunStatus("running");
 
     try {
-      const individualQueries = sqlText
+      // 🎯 FIXED: Direct multi-statement execution prioritizes automated overrides first
+      const sqlToRun = explicitSql || sqlText || generatedSql;
+
+      const cleanSql = sqlToRun
+        .split("\n")
+        .filter(line => !line.trim().startsWith("--"))
+        .join("\n");
+
+      const individualQueries = cleanSql
         .split(";")
         .map(q => q.trim())
-        .filter(q => q.length > 0 && !q.startsWith("--"));
+        .filter(q => q.length > 0);
 
       for (const query of individualQueries) {
         await runMutation(query + ";");
@@ -406,10 +472,10 @@ const handleGridExport = async (type) => {
       setCachedTableName(targetTable);
       setHasActiveGrid(true);
 
-      // Force explicit re-bind of parameters on success view mutation bounds
+      // Force-purge infinite scroll layouts to instantly fetch updated values cleanly
       if (gridApiRef.current && datasetDatasource) {
         gridApiRef.current.setGridOption("datasource", datasetDatasource);
-        gridApiRef.current.refreshInfiniteCache();
+        gridApiRef.current.purgeInfiniteCache(); 
       }
 
       await setCachedGrid("last_active_update", {
@@ -417,6 +483,10 @@ const handleGridExport = async (type) => {
         columnOrder: nativeOrder,
         totalRows: totalRows
       });
+
+      if (persistTableChanges) {
+        await persistTableChanges(targetTable);
+      }
 
       setModalConfig({
         open: true,
@@ -440,7 +510,6 @@ const handleGridExport = async (type) => {
     }
   };
 
-  // ── 🎯 STATIC DATASOURCE PATTERN (PREVENTS MAXIMUM UPDATE DEPTH ERRORS) ──
   const datasetDatasource = useMemo(() => {
     return {
       getRows: async (params) => {
@@ -448,7 +517,7 @@ const handleGridExport = async (type) => {
           const { searchText, columnOrder, totalRowCount, activeTable, runQuery } = gridParamsRef.current;
 
           if (!activeTable || !runQuery) {
-            params.successCallback([], -1); // Keep cache open if not initialized
+            params.successCallback([], -1); 
             return;
           }
 
@@ -484,14 +553,12 @@ const handleGridExport = async (type) => {
     };
   }, []);
 
-  // ── 🎯 ASYNC QUICK-FILTER CACHE PURGE HOOK ──────────────────────────────────
   useEffect(() => {
     if (gridApiRef.current) {
       gridApiRef.current.refreshInfiniteCache();
     }
   }, [searchText]);
 
-  // Bind the datasource whenever the table component mounts or updates layout state
   useEffect(() => {
     if (gridApiRef.current && datasetDatasource && hasActiveGrid) {
       gridApiRef.current.setGridOption("datasource", datasetDatasource);
@@ -499,11 +566,12 @@ const handleGridExport = async (type) => {
     }
   }, [datasetDatasource, hasActiveGrid]);
 
+  // ── 🎯 FIXED: Parameter hook link safely handles macro overrides directly without execution lag ──
   useEffect(() => {
     if (autoExecuteTrigger && autoExecuteTrigger > 0 && canRunUpdate) {
-      handleRunUpdate();
+      handleRunUpdate(generatedSql);
     }
-  }, [autoExecuteTrigger]);
+  }, [autoExecuteTrigger, canRunUpdate, generatedSql]);
 
   const removeAt = (setter) => (index) =>
     setter((prev) =>
@@ -636,7 +704,7 @@ const handleGridExport = async (type) => {
                 <span style={{ color: "#a3a3a3" }}>cell-vlookup</span>
               </div>
 
-              <button type="button" onClick={handleRunUpdate} disabled={!canRunUpdate || runStatus === "running"} style={{ display: "flex", alignItems: "center", gap: "6px", height: "24px", padding: "0 10px", background: "#18181b", color: "#fff", border: "none", borderRadius: "4px", fontSize: "11px", fontWeight: "500", cursor: "pointer" }}>
+              <button type="button" onClick={() => handleRunUpdate()} disabled={!canRunUpdate || runStatus === "running" || runStatus === "exporting"} style={{ display: "flex", alignItems: "center", gap: "6px", height: "24px", padding: "0 10px", background: "#18181b", color: "#fff", border: "none", borderRadius: "4px", fontSize: "11px", fontWeight: "500", cursor: "pointer" }}>
                 <span>{runStatus === "running" ? "⏳" : "▶"}</span>
                 <span>Run</span>
               </button>
@@ -649,6 +717,76 @@ const handleGridExport = async (type) => {
 
           {hasActiveGrid && columnOrder.length > 0 && (
             <div className="vlb-grid-card result-grid-wrapper" style={{ marginTop: "16px" }}>
+              
+              {runStatus === "exporting" && (
+                <div 
+                  className="vlb-browser-download-card" 
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "14px",
+                    background: "#ffffff", 
+                    border: "1px solid #e2e8f0", 
+                    borderRadius: "6px", 
+                    padding: "14px 16px", 
+                    marginBottom: "16px",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                    fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                  }}
+                >
+                  <div 
+                    className="download-icon-frame"
+                    style={{
+                      position: "relative",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      width: "32px",
+                      height: "36px",
+                      background: "#f1f5f9",
+                      border: "1px solid #cbd5e1",
+                      borderRadius: "4px",
+                      overflow: "hidden"
+                    }}
+                  >
+                    <span style={{ fontSize: "11px", fontWeight: "800", color: "#16a34a" }}>CSV</span>
+                    <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: "4px", background: "#16a34a" }} />
+                  </div>
+
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "2px" }}>
+                    <div 
+                      style={{ 
+                        fontSize: "13px", 
+                        fontWeight: "500", 
+                        color: "#0f172a",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        maxWidth: "520px"
+                      }}
+                      title={exportFileName}
+                    >
+                      {exportFileName}
+                    </div>
+
+                    <div style={{ fontSize: "12px", color: "#64748b", fontWeight: "400" }}>
+                      {exportStatusText}
+                    </div>
+
+                    <div style={{ width: "100%", height: "3.5px", background: "#e2e8f0", borderRadius: "2px", overflow: "hidden", marginTop: "4px" }}>
+                      <div 
+                        style={{ 
+                          width: `${exportProgress}%`, 
+                          height: "100%", 
+                          background: "#2563eb", 
+                          transition: "width 0.15s ease-out" 
+                        }} 
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="result-toolbar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", gap: "12px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "16px", flex: 1 }}>
                   <span className="row-count" style={{ fontSize: "13px", fontWeight: "600", color: "#1f2937", whiteSpace: "nowrap" }}>
@@ -672,8 +810,22 @@ const handleGridExport = async (type) => {
                 </div>
 
                 <div className="export-btns">
-                  <button className="vlb-btn vlb-btn--secondary" style={{ padding: "4px 8px", fontSize: "12px", marginRight: "6px" }} onClick={() => handleGridExport("csv")}>⬇ CSV</button>
-                  <button className="vlb-btn vlb-btn--secondary" style={{ padding: "4px 8px", fontSize: "12px" }} onClick={() => handleGridExport("excel")}>⬇ Excel</button>
+                  <button 
+                    className="vlb-btn vlb-btn--secondary" 
+                    style={{ padding: "4px 8px", fontSize: "12px", marginRight: "6px" }} 
+                    onClick={() => handleGridExport("csv")}
+                    disabled={runStatus === "exporting"}
+                  >
+                    ⬇ CSV
+                  </button>
+                  <button 
+                    className="vlb-btn vlb-btn--secondary" 
+                    style={{ padding: "4px 8px", fontSize: "12px" }} 
+                    onClick={() => handleGridExport("excel")}
+                    disabled={runStatus === "exporting" || totalRowCount > 150000}
+                  >
+                    ⬇ Excel
+                  </button>
                 </div>
               </div>
               

@@ -63,13 +63,13 @@ export default function Sidebar({
     if (!fileList || fileList.length === 0) return;
 
     const filesSnapshot = Array.from(fileList);
-
     const incomingFile = filesSnapshot[0];
     const incomingName = incomingFile.name;
 
     const matchingExistingFile = files.find(
       (f) => (typeof f === "string" ? f : f.name) === incomingName,
     );
+
     if (matchingExistingFile) {
       setModalConfig({
         open: true,
@@ -79,14 +79,16 @@ export default function Sidebar({
         confirmText: "Replace & Auto-Run",
         onConfirm: async () => {
           closeModal();
-          if (onDeleteFile) await onDeleteFile(matchingExistingFile);
+          // ── 🎯 FIXED: Removed onDeleteFile manual hook execution pointer ──
+          // Bypassing this step preserves your drag-and-drop column configurations 
+          // while DuckDB re-ingests data blocks on top of the old table directly.
           if (onUpload) onUpload(filesSnapshot, { isAutoUpdateOverride: true });
         },
       });
       return;
     }
 
-    if (tables.length >= 2) {
+    if (tables.length >= 3) {
       let evictIndex = tables.length - 1;
       if (targetTableName) {
         const masterIndex = tables.findIndex((t) => {
@@ -118,7 +120,6 @@ export default function Sidebar({
 
     if (onUpload) onUpload(filesSnapshot);
   };
-
 
   const triggerDeleteFileModal = (e, file) => {
     e.stopPropagation();

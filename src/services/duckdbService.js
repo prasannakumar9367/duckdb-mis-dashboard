@@ -50,9 +50,10 @@ export async function registerBufferAndCreateTable(fileName, buffer) {
   const tableName = fileNameToTable(fileName);
   await db.registerFileBuffer(fileName, new Uint8Array(buffer));
 
+  // ── 🎯 OPTIMIZED: all_varchar = true guarantees seamless type rehydration on mutated files ──
   await conn.query(`
     CREATE OR REPLACE TABLE "${tableName}" AS
-    SELECT * FROM read_csv_auto('${fileName}', header = true, all_varchar = false)
+    SELECT * FROM read_csv_auto('${fileName}', header = true, all_varchar = true)
   `);
 
   const [countRow] = (await conn.query(`SELECT COUNT(*) AS cnt FROM "${tableName}"`)).toArray();
@@ -85,20 +86,17 @@ export async function registerAndCreateTable(file) {
 
 /**
  * 🎯 PAGINATION DATA RETRIEVAL ENGINE
- * Designed to pull lightweight row slices (e.g., LIMIT 100) securely into the UI.
  */
 export async function runQuery(sql) {
   if (!conn) throw new Error("DuckDB connection not initialized");
   
   const result = await conn.query(sql);
   
-  // Converts Apache Arrow vectors into raw, lightweight JavaScript objects cleanly
   return result.toArray().map((row) => {
     const rowObj = {};
     for (const key in row) {
       if (Object.prototype.hasOwnProperty.call(row, key)) {
         const value = row[key];
-        // Safely downcast BigInt structures to standard numbers to prevent stringify bugs
         rowObj[key] = typeof value === "bigint" ? Number(value) : value;
       }
     }
@@ -108,7 +106,6 @@ export async function runQuery(sql) {
 
 /**
  * 🎯 IN-MEMORY DATA MUTATION ENGINE
- * Executes heavy schema corrections and transactional steps entirely inside WebAssembly storage.
  */
 export async function runMutation(sql) {
   if (!conn) throw new Error("DuckDB connection not initialized");
@@ -122,4 +119,18 @@ export async function runMutation(sql) {
 export async function dropTable(name) {
   if (!conn) return;
   await conn.query(`DROP TABLE IF EXISTS "${name}"`);
+}
+
+/**
+ * ── 🎯 HIGH-SPEED VIRTUAL FILE SYSTEM PERSISTENCE STREAM EXPORTER ──────────
+ */
+export async function getTableCSVBuffer(tableName) {
+  if (!db || !conn) throw new Error("DuckDB not initialized");
+  const tempFile = `temp_vfs_sync_${Date.now()}.csv`;
+  
+  await conn.query(`COPY "${tableName}" TO '${tempFile}' (HEADER, DELIMITER ',');`);
+  const u8Array = await db.copyFileToBuffer(tempFile);
+  await db.dropFile(tempFile);
+  
+  return u8Array.buffer;
 }

@@ -29,7 +29,8 @@ export default function Notebook() {
     clearAll,
     updateCellError,
     recordHistory,
-    runMutation 
+    runMutation,
+    persistTableChanges // ── 🎯 FIXED: Destructured context hook passed to props ──
   } = useNotebook();
 
   const [mode, setMode] = useState("pivot");
@@ -60,7 +61,6 @@ export default function Notebook() {
     },
   ]);
 
-  // ─── STABLE MEMOIZED ALIAS BRIDGES ─────────────────────────────────────────
   const parseFieldId = useCallback((id) => {
     if (typeof id !== "string") return null;
     const [table, ...columnParts] = id.split("|");
@@ -105,8 +105,6 @@ export default function Notebook() {
     });
   }, []);
 
-  // ─── STABLE MEMOIZED QUERY RUNNER REFERENCE ────────────────────────────────
-  // 🎯 FIX: Binds executeQuery to a stable reference identity to prevent child re-render drift
   const handleVLookupQuery = useCallback((sqlText) => {
     return executeQuery(null, sqlText);
   }, [executeQuery]);
@@ -118,8 +116,6 @@ export default function Notebook() {
     return () => clearTimeout(timer);
   }, []);
 
-  // ─── ACTIVE METADATA DATA VALIDATION SYSTEM ────────────────────────────────
-  // 🎯 FIX: Added lookupField and matchField to dependencies to prevent stale context loop crashes
   useEffect(() => {
     if (isInitializingRef.current) return;
     if (isSwappingRef.current) return;
@@ -380,8 +376,9 @@ export default function Notebook() {
                   onResetAll={clearAll}
                   whereConditions={whereConditions}
                   setWhereConditions={setWhereConditions}
-                  runQuery={handleVLookupQuery} // 🎯 FIX: Passed the memoized static callback function
+                  runQuery={handleVLookupQuery} 
                   runMutation={runMutation}
+                  persistTableChanges={persistTableChanges} // ── 🎯 FIXED: Wired persistence function to props ──
                   autoExecuteTrigger={autoExecuteSignal}
                 />
               )}
