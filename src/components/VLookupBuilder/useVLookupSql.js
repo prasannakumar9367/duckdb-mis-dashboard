@@ -68,22 +68,18 @@ export function useVLookupSql({
 
       // Generates sequential transactional statements separated by semicolons.
       return [
-        `-- STEP 1: Fast Inline Memory Row Updates for matched items`,
         `UPDATE ${quoteIdentifier(targetTable)} AS target`,
         `SET`,
         updateSetSql,
         `FROM ${quoteIdentifier(sourceTable)} AS source`,
         `WHERE target.${quoteIdentifier(targetKey)} = source.${quoteIdentifier(sourceKey)};`,
-        `\n-- STEP 2: Stream missing records into a temporary indexing structure`,
         `CREATE TEMP TABLE temp_vlookup_new_records AS `,
         `SELECT source.* FROM ${quoteIdentifier(sourceTable)} AS source`,
         `LEFT JOIN ${quoteIdentifier(targetTable)} AS target`,
         `  ON source.${quoteIdentifier(sourceKey)} = target.${quoteIdentifier(targetKey)}`,
         `WHERE target.${quoteIdentifier(targetKey)} IS NULL;`,
-        `\n-- STEP 3: Streaming append transaction block from staging table using split columns mapping`,
         `INSERT INTO ${quoteIdentifier(targetTable)} (${insertTargetCols})`,
         `SELECT ${selectSourceCols} FROM temp_vlookup_new_records;`,
-        `\n-- STEP 4: Immediately release internal allocations back to browser workspace`,
         `DROP TABLE temp_vlookup_new_records;`
       ].join("\n");
     }
