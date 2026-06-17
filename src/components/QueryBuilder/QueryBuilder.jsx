@@ -1,635 +1,687 @@
-import { useEffect, useMemo, useState } from "react";
-import { useDroppable } from "@dnd-kit/core";
+﻿/**
+ * QueryBuilder.jsx
+ * Demand vs Collection MIS Engine — Pivot + Join Builder
+ *
+ * Single "Pivot" mode: join is embedded inside the pivot SQL automatically.
+ * - Monaco editor for SQL (editable, with reset)
+ * - AG Grid infinite scroll for results
+ * - CSV + Excel chunked export with progress
+ * - All column names and table names discovered at runtime — zero hardcoded schema.
+ */
+
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import Editor from "@monaco-editor/react";
-import "./QueryBuilder.css";
+import { AgGridReact } from "ag-grid-react";
+import "ag-grid-community/styles/ag-grid.css";
+import "ag-grid-community/styles/ag-theme-alpine.css";
+
+import { runQuery } from "../../services/duckdbService";
 import { useNotebook } from "../../context/useNotebook";
+import BuilderDropZone from "../VLookupBuilder/VLookupDropZone";
+import "./QueryBuilder.css";
 
-const JOIN_TYPES = ["LEFT JOIN", "INNER JOIN", "RIGHT JOIN", "FULL JOIN"];
-const AGGREGATIONS = ["SUM", "COUNT", "AVG", "MIN", "MAX"];
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-function quoteIdentifier(value) {
-  return `"${String(value).replace(/"/g, '""')}"`;
+const EXPORT_CHUNK_SIZE = 50_000;
+const GRID_PAGE_SIZE   = 100;
+const AGG_OPTIONS      = ["SUM", "COUNT", "AVG", "MIN", "MAX"];
+
+// ─── Pure helpers ─────────────────────────────────────────────────────────────
+
+function q(id) {
+  return `"${String(id).replace(/"/g, '""')}"`;
 }
 
+function fieldKey(f) {
+  return f ? `${f.table}__${f.column}` : "";
+}
 
-function buildAliasName(tableName, existingAliases = new Set()) {
-  const words = tableName.split(/[^A-Za-z0-9]+/).filter(Boolean);
-  let candidate =
-    words.length > 0
-      ? words.map((word) => word[0].toLowerCase()).join("")
-      : "t";
-  if (!candidate) candidate = "t";
+function buildAlias(tableName, usedAliases = new Set()) {
+  const first = String(tableName).split(/[^a-zA-Z0-9]+/).filter(Boolean)[0] || "t";
+  let candidate = first[0].toLowerCase();
   let alias = candidate;
-  let index = 1;
-  while (existingAliases.has(alias)) {
-    alias = `${candidate}${index}`;
-    index += 1;
-  }
+  let i = 1;
+  while (usedAliases.has(alias)) { alias = `${candidate}${i}`; i++; }
   return alias;
 }
 
-function fieldKey(field) {
-  if (!field) return "";
-  return `${field.table}|${field.column}`;
-}
-
-function useBuilderSql({
-  mode,
-  joinType,
+/**
+ * Build pivot SQL that includes the join inline.
+ * Rows → GROUP BY, Values → aggregated, Columns → client-side pivot.
+ */
+function buildPivotSql({
+  joinType = "LEFT JOIN",
+  leftTableName,
+  rightTableName,
   leftJoinField,
   rightJoinField,
-  rowFields,
-  columnFields,
-  valueFields,
-  filterFields,
+  rowFields   = [],
+  columnFields = [],
+  valueFields  = [],
+  filterFields = [],
+  tables       = [],
 }) {
-  return useMemo(() => {
-    const selectedFields = [
-      ...(rowFields || []),
-      ...(columnFields || []),
-      ...(valueFields || []),
-      ...(filterFields || []),
-    ].filter(Boolean);
+  if (!leftTableName) return null;
 
-    const allTables = new Set();
-    selectedFields.forEach((field) => allTables.add(field.table));
-    if (leftJoinField) allTables.add(leftJoinField.table);
-    if (rightJoinField) allTables.add(rightJoinField.table);
+  const usedAliases = new Set();
+  const lAlias = buildAlias(leftTableName, usedAliases);
+  usedAliases.add(lAlias);
 
-    if (mode === "join") {
-      if (!leftJoinField || !rightJoinField) {
-        return "-- Drag one column into Left Table and one into Right Table to generate a JOIN statement.";
-      }
+  let fromClause = `FROM ${q(leftTableName)} ${lAlias}`;
 
-      const aliases = new Map();
-      const usedAliases = new Set();
-      const leftAlias = buildAliasName(leftJoinField.table, usedAliases);
-      usedAliases.add(leftAlias);
-      aliases.set(leftJoinField.table, leftAlias);
-      let rightAlias = buildAliasName(rightJoinField.table, usedAliases);
-      if (leftJoinField.table === rightJoinField.table) {
-        rightAlias = buildAliasName(`_${rightJoinField.table}_r`, usedAliases);
-      }
-      usedAliases.add(rightAlias);
-      aliases.set(rightJoinField.table, rightAlias);
+  if (rightTableName && leftJoinField && rightJoinField) {
+    const rAlias = buildAlias(rightTableName, usedAliases);
+    usedAliases.add(rAlias);
+    fromClause +=
+      `\n${joinType} ${q(rightTableName)} ${rAlias}` +
+      ` ON ${lAlias}.${q(leftJoinField)} = ${rAlias}.${q(rightJoinField)}`;
+  }
 
-      const leftRef = `${leftAlias}.${quoteIdentifier(leftJoinField.column)}`;
-      const rightRef = `${rightAlias}.${quoteIdentifier(rightJoinField.column)}`;
+  // Build SELECT expressions
+  const resolveAlias = (f) => {
+    const snap = new Set(Array.from(usedAliases));
+    return buildAlias(f.table, snap);
+  };
 
-      const joinSql = [
-        `SELECT`,
-        `  *`,
-        `FROM ${quoteIdentifier(leftJoinField.table)} ${leftAlias}`,
-        `  ${joinType} ${quoteIdentifier(rightJoinField.table)} ${rightAlias}`,
-        `    ON ${leftRef} = ${rightRef}`,
-        `;`,
-      ].join("\n");
+  const groupByExprs = rowFields.map(
+    (f) => `${resolveAlias(f)}.${q(f.column)}`
+  );
 
-      return joinSql;
-    }
+  const valueExprs = valueFields.map((f) => {
+    const agg = f.agg || "SUM";
+    return `${agg}(${resolveAlias(f)}.${q(f.column)}) AS ${q(`${agg}_${f.column}`)}`;
+  });
 
-    if (mode === "pivot") {
-      if (!Array.isArray(valueFields) || valueFields.length === 0) {
-        return "-- Drag at least one Measures field into Values to generate a pivot query.";
-      }
-      if (!Array.isArray(columnFields) || columnFields.length === 0) {
-        return "-- Drag at least one Columns field to pivot data sideways into an Excel matrix.";
-      }
+  const selectExprs = [...groupByExprs, ...valueExprs];
+  if (!selectExprs.length) return null;
 
-      const selectedTables = new Set(
-        selectedFields.map((field) => field.table),
-      );
-      const hasJoin = leftJoinField && rightJoinField;
-      const aliasMap = new Map();
-      const usedAliases = new Set();
-      const joinAliases = {};
+  const parts = [`SELECT ${selectExprs.join(",\n       ")}`, fromClause];
+  if (groupByExprs.length) parts.push(`GROUP BY ${groupByExprs.join(", ")}`);
 
-      if (hasJoin) {
-        const leftAlias = buildAliasName(leftJoinField.table, usedAliases);
-        usedAliases.add(leftAlias);
-        aliasMap.set(leftJoinField.table, leftAlias);
-        joinAliases.left = leftAlias;
-
-        let rightAlias = buildAliasName(rightJoinField.table, usedAliases);
-        if (leftJoinField.table === rightJoinField.table) {
-          rightAlias = buildAliasName(
-            `_${rightJoinField.table}_r`,
-            usedAliases,
-          );
-        }
-        usedAliases.add(rightAlias);
-        aliasMap.set(rightJoinField.table, rightAlias);
-        joinAliases.right = rightAlias;
-      }
-
-      selectedTables.forEach((table) => {
-        if (!aliasMap.has(table)) {
-          const alias = buildAliasName(table, usedAliases);
-          usedAliases.add(alias);
-          aliasMap.set(table, alias);
-        }
-      });
-
-      const fieldReference = (field) => {
-        if (!field) return "";
-        const alias =
-          aliasMap.get(field.table) || buildAliasName(field.table, usedAliases);
-        return `${alias}.${quoteIdentifier(field.column)}`;
-      };
-
-      const distinctRows = Array.from(
-        new Map(rowFields.map((field) => [fieldKey(field), field])).values(),
-      );
-      const distinctCols = Array.from(
-        new Map(columnFields.map((field) => [fieldKey(field), field])).values(),
-      );
-      const distinctFilters = Array.from(
-        new Map(filterFields.map((field) => [fieldKey(field), field])).values(),
-      );
-      const distinctValues = Array.from(
-        new Map(valueFields.map((field) => [fieldKey(field), field])).values(),
-      );
-
- 
-      const subqueryNameMap = new Map();
-      const allocatedNames = new Set();
-      const allUniqueFields = [...distinctRows, ...distinctCols, ...distinctValues, ...distinctFilters];
-
-      allUniqueFields.forEach((field) => {
-        const key = fieldKey(field);
-        if (subqueryNameMap.has(key)) return;
-
-        let candidate = field.column;
-        if (allocatedNames.has(candidate)) {
-          candidate = `${field.table}_${field.column}`;
-        }
-        let finalName = candidate;
-        let counter = 1;
-        while (allocatedNames.has(finalName)) {
-          finalName = `${candidate}_${counter}`;
-          counter++;
-        }
-        allocatedNames.add(finalName);
-        subqueryNameMap.set(key, finalName);
-      });
-
-      const subquerySelectParts = [];
-      subqueryNameMap.forEach((finalName, key) => {
-        const field = allUniqueFields.find((f) => fieldKey(f) === key);
-        const ref = fieldReference(field);
-        subquerySelectParts.push(`    ${ref} AS ${quoteIdentifier(finalName)}`);
-      });
-
-      const fromParts = [];
-      if (hasJoin) {
-        const leftTable = leftJoinField.table;
-        const rightTable = rightJoinField.table;
-        const leftRef = `${joinAliases.left}.${quoteIdentifier(leftJoinField.column)}`;
-        const rightRef = `${joinAliases.right}.${quoteIdentifier(rightJoinField.column)}`;
-        fromParts.push(
-          `  FROM ${quoteIdentifier(leftTable)} ${joinAliases.left}`,
-          `    ${joinType} ${quoteIdentifier(rightTable)} ${joinAliases.right}`,
-          `      ON ${leftRef} = ${rightRef}`,
-        );
-      } else if (selectedTables.size > 0) {
-        const [table] = selectedTables;
-        fromParts.push(`  FROM ${quoteIdentifier(table)} ${aliasMap.get(table)}`);
-      } else {
-        return "-- Drag a field from a table to start generating pivot SQL.";
-      }
-
-      const whereClauses = distinctFilters.map(
-        (field) => `${fieldReference(field)} IS NOT NULL`
-      );
-
-      const implicitWhere = whereClauses.length > 0
-        ? `  WHERE\n    ${whereClauses.join(" AND\n    ")}`
-        : "";
-
-      const whereClause = implicitWhere;
-
-      const subquerySql = [
-        `  SELECT`,
-        subquerySelectParts.join(",\n"),
-        ...fromParts,
-        whereClause,
-      ]
-        .filter(Boolean)
-        .join("\n");
-
-      const rowNames = distinctRows.map(f => subqueryNameMap.get(fieldKey(f)));
-      const colNames = distinctCols.map(f => subqueryNameMap.get(fieldKey(f)));
-      const valNames = distinctValues.map(f => subqueryNameMap.get(fieldKey(f)));
-
-      const baseSelect = [...rowNames, ...colNames, ...valNames].map(quoteIdentifier).join(', ');
-      
-     
-      const colTotalsSelect = [
-        ...rowNames.map(quoteIdentifier),
-        ...colNames.map(name => `'\u200BGrand Total' AS ${quoteIdentifier(name)}`),
-        ...valNames.map(quoteIdentifier)
-      ].join(', ');
-
-      const rowTotalsSelect = [
-        ...rowNames.map(name => `'Grand Total' AS ${quoteIdentifier(name)}`),
-        ...colNames.map(quoteIdentifier),
-        ...valNames.map(quoteIdentifier)
-      ].join(', ');
-
-      const overallTotalsSelect = [
-        ...rowNames.map(name => `'Grand Total' AS ${quoteIdentifier(name)}`),
-        ...colNames.map(name => `'\u200BGrand Total' AS ${quoteIdentifier(name)}`),
-        ...valNames.map(quoteIdentifier)
-      ].join(', ');
-
-      const outerOnParts = colNames.map(quoteIdentifier);
-      const outerGroupByParts = rowNames.map(quoteIdentifier);
-      const outerUsingParts = distinctValues.map((field) => {
-        const simpleName = subqueryNameMap.get(fieldKey(field));
-        const agg = !!field.agg && AGGREGATIONS.includes(field.agg) ? field.agg : "SUM";
-        return `${agg}(${quoteIdentifier(simpleName)})`;
-      });
-
-      const sortParts = [
-        ...rowNames.map(name => `CASE WHEN ${quoteIdentifier(name)} = 'Grand Total' THEN 1 ELSE 0 END`),
-        ...rowNames.map(quoteIdentifier)
-      ];
-
-      return [
-        `WITH base_metrics AS (`,
-        subquerySql,
-        `),`,
-        `metrics_with_totals AS (`,
-        `  SELECT ${baseSelect} FROM base_metrics`,
-        `  UNION ALL`,
-        `  SELECT ${colTotalsSelect} FROM base_metrics`,
-        `  UNION ALL`,
-        `  SELECT ${rowTotalsSelect} FROM base_metrics`,
-        `  UNION ALL`,
-        `  SELECT ${overallTotalsSelect} FROM base_metrics`,
-        `)`,
-        `PIVOT metrics_with_totals`,
-        `ON ${outerOnParts.join(", ")}`,
-        outerUsingParts.length > 0 ? `USING ${outerUsingParts.join(", ")}` : "",
-        outerGroupByParts.length > 0 ? `GROUP BY ${outerGroupByParts.join(", ")}` : "",
-        outerGroupByParts.length > 0 ? `ORDER BY ${sortParts.join(", ")}` : "",
-        `;`
-      ]
-        .filter(Boolean)
-        .join("\n");
-    }
-
-    return "-- Select a builder tab to start building SQL.";
-  }, [
-    mode,
-    joinType,
-    leftJoinField,
-    rightJoinField,
-    rowFields,
-    columnFields,
-    valueFields,
-    filterFields,
-  ]);
+  return parts.join("\n");
 }
 
-function BuilderDropZone({
-  id,
-  label,
-  placeholder,
-  values = [],
-  onRemove,
-  accent,
-}) {
-  const { setNodeRef, isOver } = useDroppable({ id });
-  const active = isOver ? "true" : "false";
+// ─── Export helpers ───────────────────────────────────────────────────────────
 
+function rowsToCsv(rows) {
+  if (!rows.length) return "";
+  const headers = Object.keys(rows[0]);
+  const escape  = (v) => {
+    if (v == null) return "";
+    const s = String(v);
+    return s.includes(",") || s.includes('"') || s.includes("\n")
+      ? `"${s.replace(/"/g, '""')}"`
+      : s;
+  };
+  return [
+    headers.join(","),
+    ...rows.map((r) => headers.map((h) => escape(r[h])).join(",")),
+  ].join("\n");
+}
+
+function downloadText(content, filename, mime = "text/csv;charset=utf-8;") {
+  const blob = new Blob([content], { type: mime });
+  const url  = URL.createObjectURL(blob);
+  const a    = Object.assign(document.createElement("a"), { href: url, download: filename });
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportExcel(rows, filename = "export.xlsx") {
+  if (typeof window.XLSX === "undefined") {
+    console.warn("SheetJS not loaded — falling back to CSV");
+    downloadText(rowsToCsv(rows), filename.replace(".xlsx", ".csv"));
+    return;
+  }
+  const ws = window.XLSX.utils.json_to_sheet(rows);
+  const wb = window.XLSX.utils.book_new();
+  window.XLSX.utils.book_append_sheet(wb, ws, "Results");
+  window.XLSX.writeFile(wb, filename);
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function StatusBar({ count, message }) {
   return (
-    <div
-      ref={setNodeRef}
-      data-dragging-over={active}
-      className="builder-dropzone"
-      style={{
-        borderColor: accent,
-        background: isOver ? "rgba(59, 130, 246, 0.08)" : "transparent",
-      }}
-    >
-      <div className="builder-dropzone__label">{label}</div>
-      {values.length === 0 ? (
-        <div className="builder-dropzone__placeholder">{placeholder}</div>
-      ) : (
-        values.map((field) => (
-          <div key={fieldKey(field)} className="builder-dropzone__chip">
-            <span>{`${field.table}.${field.column}`}</span>
-            {field.agg && (
-              <span className="builder-dropzone__badge">{field.agg}</span>
-            )}
-            <button onClick={() => onRemove && onRemove(field)} type="button">
-              ×
-            </button>
-          </div>
-        ))
-      )}
+    <div className="qb-status-bar">
+      <span>
+        Rows:{" "}
+        <strong>{count !== null ? count.toLocaleString("en-IN") : "—"}</strong>
+      </span>
+      {message && <span className="qb-status-bar__msg">{message}</span>}
     </div>
   );
 }
 
+function ExportProgress({ progress, status }) {
+  return (
+    <div className="qb-export-progress">
+      <span className="qb-export-progress__label">{status}</span>
+      <div className="qb-export-progress__track">
+        <div
+          className="qb-export-progress__fill"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+      <span className="qb-export-progress__pct">{progress}%</span>
+    </div>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
+/**
+ * Props:
+ *   joinType        — "LEFT JOIN" | "INNER JOIN" | "RIGHT JOIN" | "FULL OUTER JOIN"
+ *   leftTableName   — left/demand table
+ *   leftJoinField   — column to join on (left side)   [string]
+ *   rightTableName  — right/NH-structure table
+ *   rightJoinField  — column to join on (right side)  [string]
+ *   tables          — [{ name, columns: [{ name, type }] }]
+ *   onResetFields   — clear all drop-zone state in parent
+ *   onClearJoin     — clear join fields in parent
+ */
 export default function QueryBuilder({
-  mode,
-  setMode,
-  joinType,
-  setJoinType,
-  leftJoinField,
-  rightJoinField,
-  setLeftJoinField,
-  setRightJoinField,
-  rowFields,
-  setRowFields,
-  columnFields,
-  setColumnFields,
-  valueFields,
-  setValueFields,
-  filterFields,
-  setFilterFields,
+  joinType = "LEFT JOIN",
+  leftTableName,
+  leftJoinField: leftJoinProp,
+  rightTableName,
+  rightJoinField: rightJoinProp,
+  tables = [],
   onResetFields,
   onClearJoin,
 }) {
-  const [sqlText, setSqlText] = useState("");
+  // ── Drop-zone state ───────────────────────────────────────────────────────
+  const [leftJoinField,  setLeftJoinField]  = useState(leftJoinProp  ?? null);
+  const [rightJoinField, setRightJoinField] = useState(rightJoinProp ?? null);
+  const [rowFields,      setRowFields]      = useState([]);
+  const [columnFields,   setColumnFields]   = useState([]);
+  const [valueFields,    setValueFields]    = useState([]);
+  const [filterFields,   setFilterFields]   = useState([]);
+
+  useEffect(() => { setLeftJoinField(leftJoinProp   ?? null); }, [leftJoinProp]);
+  useEffect(() => { setRightJoinField(rightJoinProp ?? null); }, [rightJoinProp]);
+
+  // ── SQL state ─────────────────────────────────────────────────────────────
+  const [sqlText,   setSqlText]   = useState("");
   const [sqlEdited, setSqlEdited] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copied,    setCopied]    = useState(false);
 
-  const generatedSql = useBuilderSql({
-    mode,
-    joinType,
-    leftJoinField,
-    rightJoinField,
-    rowFields,
-    columnFields,
-    valueFields,
-    filterFields,
-  });
+  // ── Grid / query state ────────────────────────────────────────────────────
+  const [gridApi,       setGridApi]       = useState(null);
+  const [columnDefs,    setColumnDefs]    = useState([]);
+  const [previewCount,  setPreviewCount]  = useState(null);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [executing,     setExecuting]     = useState(false);
+  const [metaLoading,   setMetaLoading]   = useState(false);
+  const [metaError,     setMetaError]     = useState(null);
+  const [hasResults,    setHasResults]    = useState(false);
 
+  // ── Export state ──────────────────────────────────────────────────────────
+  const [exporting,      setExporting]      = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const [exportStatus,   setExportStatus]   = useState("");
+
+  // ── Context ───────────────────────────────────────────────────────────────
   const { registerPivotConfig } = useNotebook();
 
+  // ── Generated SQL (memoised) ──────────────────────────────────────────────
+  const generatedSql = useMemo(
+    () =>
+      buildPivotSql({
+        joinType,
+        leftTableName,
+        rightTableName,
+        leftJoinField,
+        rightJoinField,
+        rowFields,
+        columnFields,
+        valueFields,
+        filterFields,
+        tables,
+      }) ?? "",
+    [
+      joinType, leftTableName, rightTableName,
+      leftJoinField, rightJoinField,
+      rowFields, columnFields, valueFields, filterFields, tables,
+    ]
+  );
+
+  const displayedSql = sqlEdited ? sqlText : generatedSql;
+
   useEffect(() => {
-    if (mode === "pivot") {
-      registerPivotConfig({
-        sql: generatedSql,
-        rowFields: rowFields || [],
-        columnFields: columnFields || [],
-        valueFields: valueFields || [],
-      });
+    if (!sqlEdited) setSqlText(generatedSql);
+  }, [generatedSql, sqlEdited]);
+
+  // Register pivot config with notebook context
+  useEffect(() => {
+    if (typeof registerPivotConfig === "function") {
+      registerPivotConfig({ sql: generatedSql, rowFields, columnFields, valueFields });
     }
-  }, [mode, generatedSql, rowFields, columnFields, valueFields, registerPivotConfig]);
+  }, [generatedSql, rowFields, columnFields, valueFields, registerPivotConfig]);
 
+  // ── Datasource ref (stable across renders) ────────────────────────────────
+  const datasourceRef     = useRef(null);
+  const displayedSqlRef   = useRef(displayedSql);
+  const columnDefsRef     = useRef(columnDefs);
 
-  const handleSqlChange = (value) => {
-    setSqlText(value ?? "");
+  useEffect(() => { displayedSqlRef.current = displayedSql; }, [displayedSql]);
+  useEffect(() => { columnDefsRef.current   = columnDefs;   }, [columnDefs]);
+
+  // ── Run Preview ───────────────────────────────────────────────────────────
+  const runPreview = useCallback(async () => {
+    const baseSql = displayedSqlRef.current.replace(/;\s*$/, "");
+    if (!baseSql.trim()) return;
+
+    setExecuting(true);
+    setMetaError(null);
+    setStatusMessage("Running…");
+    setHasResults(false);
+
+    try {
+      // Count
+      const countRes = await runQuery(
+        `SELECT COUNT(*) AS cnt FROM (${baseSql}) AS _cnt`
+      );
+      const total = Number(countRes?.[0]?.cnt ?? 0);
+      setPreviewCount(total);
+
+      // Column defs from first row
+      const sample = await runQuery(`${baseSql} LIMIT 1`);
+      if (sample.length > 0) {
+        const defs = Object.keys(sample[0]).map((key) => ({
+          field: key,
+          headerName: key,
+          sortable: true,
+          filter: true,
+          resizable: true,
+          minWidth: 120,
+        }));
+        setColumnDefs(defs);
+        columnDefsRef.current = defs;
+      }
+
+      setStatusMessage(`${total.toLocaleString("en-IN")} rows`);
+
+      // Build datasource and attach to grid
+      const ds = {
+        getRows: async (params) => {
+          const sql  = displayedSqlRef.current.replace(/;\s*$/, "");
+          const limit = params.endRow - params.startRow;
+          try {
+            const rows = await runQuery(`${sql} LIMIT ${limit} OFFSET ${params.startRow}`);
+            const last = rows.length < limit ? params.startRow + rows.length : undefined;
+            params.successCallback(rows, last);
+          } catch {
+            params.failCallback();
+          }
+        },
+      };
+      datasourceRef.current = ds;
+      if (gridApi) gridApi.setDatasource(ds);
+
+      setHasResults(true);
+    } catch (err) {
+      setMetaError(err?.message || "Query failed");
+      setStatusMessage("Error");
+    } finally {
+      setExecuting(false);
+    }
+  }, [gridApi]);
+
+  // ── AG Grid ready ─────────────────────────────────────────────────────────
+  const handleGridReady = useCallback((params) => {
+    setGridApi(params.api);
+    if (datasourceRef.current) params.api.setDatasource(datasourceRef.current);
+  }, []);
+
+  // ── SQL editor ────────────────────────────────────────────────────────────
+  const handleSqlChange = (val) => {
+    setSqlText(val ?? "");
     setSqlEdited(true);
   };
 
   const handleResetSql = () => {
     setSqlText(generatedSql);
     setSqlEdited(false);
+    setStatusMessage("SQL reset.");
   };
 
-  const displayedSql = sqlEdited ? sqlText : generatedSql;
-
   const handleCopySql = async () => {
-    const textToCopy = displayedSql ?? "";
-    if (!textToCopy.trim()) return;
     try {
-      await navigator.clipboard.writeText(textToCopy);
+      await navigator.clipboard.writeText(displayedSql);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
+      setTimeout(() => setCopied(false), 1600);
+    } catch { /* permission denied */ }
+  };
+
+  // ── Export CSV ────────────────────────────────────────────────────────────
+  const handleExportCsv = async () => {
+    const baseSql = displayedSql.replace(/;\s*$/, "");
+    if (!baseSql.trim()) return;
+    setExporting(true);
+    setExportProgress(0);
+    setExportStatus("Starting export…");
+
+    try {
+      const total = previewCount ?? Number(
+        (await runQuery(`SELECT COUNT(*) AS cnt FROM (${baseSql}) AS _e`))?.[0]?.cnt ?? 0
+      );
+      const parts = [];
+      let offset  = 0;
+
+      while (offset < total) {
+        const chunk = await runQuery(`${baseSql} LIMIT ${EXPORT_CHUNK_SIZE} OFFSET ${offset}`);
+        parts.push(...chunk);
+        offset += chunk.length;
+        setExportProgress(Math.min(100, Math.round((offset / total) * 100)));
+        setExportStatus(`${offset.toLocaleString("en-IN")} / ${total.toLocaleString("en-IN")} rows`);
+        if (chunk.length < EXPORT_CHUNK_SIZE) break;
+      }
+
+      downloadText(rowsToCsv(parts), `pivot_export_${Date.now()}.csv`);
+      setExportStatus("Export complete.");
     } catch (err) {
-      console.warn("Failed to copy generated SQL statement:", err);
+      setExportStatus("Export failed.");
+    } finally {
+      setExporting(false);
+      setExportProgress(0);
     }
   };
 
-  const removeFromList = (field, list, setter) => {
-    setter(list.filter((item) => fieldKey(item) !== fieldKey(field)));
+  // ── Export Excel ──────────────────────────────────────────────────────────
+  const handleExportExcel = async () => {
+    const baseSql = displayedSql.replace(/;\s*$/, "");
+    if (!baseSql.trim()) return;
+    setExporting(true);
+    setExportProgress(0);
+    setExportStatus("Preparing Excel…");
+
+    try {
+      const total = previewCount ?? Number(
+        (await runQuery(`SELECT COUNT(*) AS cnt FROM (${baseSql}) AS _e`))?.[0]?.cnt ?? 0
+      );
+      const rows   = [];
+      let offset   = 0;
+
+      while (offset < total) {
+        const chunk = await runQuery(`${baseSql} LIMIT ${EXPORT_CHUNK_SIZE} OFFSET ${offset}`);
+        rows.push(...chunk);
+        offset += chunk.length;
+        setExportProgress(Math.min(100, Math.round((offset / total) * 100)));
+        setExportStatus(`${offset.toLocaleString("en-IN")} / ${total.toLocaleString("en-IN")} rows`);
+        if (chunk.length < EXPORT_CHUNK_SIZE) break;
+      }
+
+      exportExcel(rows, `pivot_export_${Date.now()}.xlsx`);
+      setExportStatus("Export complete.");
+    } catch {
+      setExportStatus("Export failed.");
+    } finally {
+      setExporting(false);
+      setExportProgress(0);
+    }
   };
 
-  const removeValueField = (field) => {
-    setValueFields(
-      valueFields.filter((item) => fieldKey(item) !== fieldKey(field)),
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const removeFromList = (field, setter) =>
+    setter((prev) => prev.filter((item) => fieldKey(item) !== fieldKey(field)));
+
+  const updateValueAgg = (field, agg) =>
+    setValueFields((prev) =>
+      prev.map((item) => fieldKey(item) === fieldKey(field) ? { ...item, agg } : item)
     );
-  };
 
-  const setValueAgg = (field, agg) => {
-    setValueFields(
-      valueFields.map((item) => {
-        if (fieldKey(item) !== fieldKey(field)) return item;
-        return { ...item, agg };
-      }),
-    );
-  };
+  const canRun = !!displayedSql.trim() && !!leftTableName;
 
-  
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="query-builder">
+
+      {/* ── Header ───────────────────────────────────────────────────────── */}
       <div className="query-builder__header">
         <div>
-          <h3>PIVOT Builder</h3>
-          <p>
-            Drag table columns from the sidebar into the builder zones to
-            generate DuckDB SQL.
+          <h3>Pivot Builder</h3>
+          <p className="query-builder__subtitle">
+            {leftTableName && rightTableName
+              ? `${leftTableName} ${joinType} ${rightTableName}`
+              : "Configure the join and drop fields below to build your pivot query."}
           </p>
         </div>
         <div className="query-builder__meta">
-          <button className="btn-secondary" type="button" onClick={onClearJoin}>
-            Reset Builder
-          </button>
-          <button
-            className="btn-secondary"
-            type="button"
-            onClick={onResetFields}
-          >
-            Clear Fields
-          </button>
+          {typeof onResetFields === "function" && (
+            <button className="btn-secondary" type="button" onClick={onResetFields}>
+              Reset
+            </button>
+          )}
+          {typeof onClearJoin === "function" && (
+            <button className="btn-secondary" type="button" onClick={onClearJoin}>
+              Clear Join
+            </button>
+          )}
         </div>
       </div>
 
-      <div className="query-builder__body">
-        <div className="query-builder__controls">
-          <section className="builder-accordion">
-            <button
-              type="button"
-              className="builder-accordion-header"
-              onClick={() => setMode("pivot")}
-            >
-              <span>{mode === "pivot" ? "▼" : "▶"} Pivot Builder</span>
-              <span>{valueFields.length} measures</span>
-            </button>
-            {mode === "pivot" && (
-              <div className="builder-accordion-body">
-                <BuilderDropZone
-                  id="pivot-rows"
-                  label="Rows"
-                  placeholder="Drop row fields"
-                  values={rowFields}
-                  onRemove={(field) =>
-                    removeFromList(field, rowFields, setRowFields)
-                  }
-                 accentColor="#1d4ed8"
-                />
-                <BuilderDropZone
-                  id="pivot-columns"
-                  label="Columns"
-                  placeholder="Drop column fields"
-                  values={columnFields}
-                  onRemove={(field) =>
-                    removeFromList(field, columnFields, setColumnFields)
-                  }
-                   accentColor="#7c3aed"
-                />
-                <BuilderDropZone
-                  id="pivot-values"
-                  label="Values"
-                  placeholder="Drop value fields"
-                  values={valueFields}
-                  onRemove={removeValueField}
-                 accentColor="#059669"
-                />
-                <BuilderDropZone
-                  id="pivot-filters"
-                  label="Filters"
-                  placeholder="Drop filter fields"
-                  values={filterFields}
-                  onRemove={(field) =>
-                    removeFromList(field, filterFields, setFilterFields)
-                  }
-                  accentColor="#f97316"
-                />
-                {(rowFields.length > 1 || columnFields.length > 1 || valueFields.length > 1) && (
-                  <div className="builder-warning">
-                    Multiple row/column/value fields are supported through deep cross-tab mapping vectors.
-                  </div>
-                )}
-                {valueFields.length > 0 && (
-                  <div className="builder-agg-list">
-                    {valueFields.map((field) => (
-                      <label key={fieldKey(field)} className="builder-agg-item">
-                        <span>{`${field.table}.${field.column}`}</span>
-                        <select
-                          value={field.agg || "SUM"}
-                          onChange={(e) => setValueAgg(field, e.target.value)}
-                        >
-                          {AGGREGATIONS.map((agg) => (
-                            <option key={agg} value={agg}>
-                              {agg}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
+      {/* ── Drop Zones ───────────────────────────────────────────────────── */}
+      <div className="query-builder__builder">
 
-          <section className="builder-accordion">
-            <button
-              type="button"
-              className="builder-accordion-header"
-              onClick={() => setMode("join")}
-            >
-              <span>{mode === "join" ? "▼" : "▶"} Join Builder</span>
-              <span>
-                {leftJoinField && rightJoinField ? "Connected" : "Empty"}
-              </span>
-            </button>
-            {mode === "join" && (
-              <div className="builder-accordion-body">
-                <div className="builder-card__grid">
-                  <div className="builder-card__item">
-                    <BuilderDropZone
-                      id="join-left"
-                      label="Left Table"
-                      placeholder="Drop left table column here"
-                      values={leftJoinField ? [leftJoinField] : []}
-                      onRemove={() => setLeftJoinField(null)}
-                      accentColor="#3b82f6"
-                    />
-                  </div>
-                  <div className="builder-card__item">
-                    <BuilderDropZone
-                      id="join-right"
-                      label="Right Table"
-                      placeholder="Drop right table column here"
-                      values={rightJoinField ? [rightJoinField] : []}
-                      onRemove={() => setRightJoinField(null)}
-                      accentColor="#8b5cf6"
-                    />
-                  </div>
-                </div>
-                <div className="builder-card__row">
-                  <label htmlFor="join-type">Join Type</label>
-                  <select
-                    id="join-type"
-                    value={joinType}
-                    onChange={(e) => setJoinType(e.target.value)}
-                  >
-                    {JOIN_TYPES.map((type) => (
-                      <option key={type} value={type}>
-                        {type}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            )}
-          </section>
-
-          
+        {/* Join fields */}
+        <div className="builder-panel builder-panel--join">
+          <div className="builder-panel__section-label">Join</div>
+          <BuilderDropZone
+            id="join-left"
+            label="Left Join Field"
+            placeholder="Drop left join column"
+            values={leftJoinField ? [leftJoinField] : []}
+            onRemove={() => setLeftJoinField(null)}
+            accent="#2563eb"
+          />
+          <BuilderDropZone
+            id="join-right"
+            label="Right Join Field"
+            placeholder="Drop right join column"
+            values={rightJoinField ? [rightJoinField] : []}
+            onRemove={() => setRightJoinField(null)}
+            accent="#9333ea"
+          />
         </div>
 
-        <div className="query-builder__preview">
-          <div className="builder-card builder-card--sql">
-            <div className="builder-card__title">Generated SQL</div>
+        {/* Pivot fields */}
+        <div className="builder-panel builder-panel--pivot">
+          <div className="builder-panel__section-label">Pivot</div>
+          <div className="builder-panel__pivot-grid">
+            <BuilderDropZone
+              id="pivot-rows"
+              label="Rows (Group By)"
+              placeholder="Drop row fields"
+              values={rowFields}
+              onRemove={(f) => removeFromList(f, setRowFields)}
+              accent="#1d4ed8"
+            />
+            <BuilderDropZone
+              id="pivot-columns"
+              label="Columns"
+              placeholder="Drop column fields"
+              values={columnFields}
+              onRemove={(f) => removeFromList(f, setColumnFields)}
+              accent="#7c3aed"
+            />
+            <BuilderDropZone
+              id="pivot-values"
+              label="Values (Aggregate)"
+              placeholder="Drop value fields"
+              values={valueFields}
+              onRemove={(f) => removeFromList(f, setValueFields)}
+              accent="#059669"
+            />
+            <BuilderDropZone
+              id="pivot-filters"
+              label="Filters"
+              placeholder="Drop filter fields"
+              values={filterFields}
+              onRemove={(f) => removeFromList(f, setFilterFields)}
+              accent="#f97316"
+            />
+          </div>
 
-            <div className="monaco-wrapper">
-              <Editor
-                height="100%"
-                language="sql"
-                value={displayedSql}
-                onChange={handleSqlChange}
-                options={{
-                  minimap: { enabled: false },
-                  fontSize: 12,
-                  lineNumbers: "on",
-                  scrollBeyondLastLine: false,
-                  automaticLayout: true,
-                  wordWrap: "on",
-                }}
-              />
+          {/* Aggregation selectors */}
+          {valueFields.length > 0 && (
+            <div className="builder-agg-panel">
+              <p className="builder-agg-panel__label">Aggregation</p>
+              {valueFields.map((field) => (
+                <label key={fieldKey(field)} className="builder-agg-item">
+                  <span className="builder-agg-item__name">
+                    {field.table}.{field.column}
+                  </span>
+                  <select
+                    value={field.agg || "SUM"}
+                    onChange={(e) => updateValueAgg(field, e.target.value)}
+                  >
+                    {AGG_OPTIONS.map((agg) => (
+                      <option key={agg} value={agg}>{agg}</option>
+                    ))}
+                  </select>
+                </label>
+              ))}
             </div>
+          )}
+        </div>
+      </div>
 
-            <div className="sql-action-bar">
-              <button
-                type="button"
-                onClick={handleCopySql}
-                disabled={!displayedSql || !displayedSql.trim()}
-                className="btn-primary"
-                style={{ background: copied ? "#16a34a" : "#111827", transition: "background 0.15s ease" }}
-              >
-                {copied ? "Copied!" : "Copy SQL"}
-              </button>
+      {/* ── Monaco SQL Editor ─────────────────────────────────────────────── */}
+      <div className="query-builder__sql-card">
+        <div className="qb-cell-bar">
+          <div className="qb-cell-bar__label">
+            <span>SQL</span>
+            <span className="qb-cell-bar__muted">pivot-query</span>
+            {sqlEdited && <span className="qb-edited-badge">edited</span>}
+          </div>
+          <div className="qb-cell-bar__actions">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleCopySql}
+              disabled={!displayedSql.trim()}
+            >
+              {copied ? "Copied ✓" : "Copy"}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleResetSql}
+              disabled={!sqlEdited}
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              className="qb-run-btn"
+              onClick={runPreview}
+              disabled={executing || !canRun}
+            >
+              {executing ? "⏳ Running…" : "▶ Run"}
+            </button>
+          </div>
+        </div>
 
+        <div className="qb-monaco-wrapper">
+          <Editor
+            height="180px"
+            language="sql"
+            value={displayedSql}
+            onChange={handleSqlChange}
+            theme="vs-light"
+            options={{
+              minimap: { enabled: false },
+              fontSize: 12,
+              lineNumbers: "on",
+              scrollBeyondLastLine: false,
+              automaticLayout: true,
+              wordWrap: "on",
+              padding: { top: 10, bottom: 10 },
+              folding: false,
+              renderValidationDecorations: "off",
+              scrollbar: { vertical: "auto", horizontal: "auto" },
+            }}
+          />
+        </div>
+      </div>
+
+      {/* ── Results Panel ─────────────────────────────────────────────────── */}
+      {(hasResults || metaError || executing) && (
+        <div className="query-builder__results-card">
+
+          {/* Toolbar */}
+          <div className="qb-results-toolbar">
+            <StatusBar count={previewCount} message={statusMessage} />
+            <div className="qb-results-toolbar__exports">
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={handleResetSql}
-                disabled={!sqlEdited}
+                onClick={handleExportCsv}
+                disabled={exporting || !hasResults}
               >
-                Reset SQL
+                {exporting ? `${exportProgress}%` : "⬇ CSV"}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleExportExcel}
+                disabled={exporting || !hasResults}
+              >
+                ⬇ Excel
               </button>
             </div>
           </div>
+
+          {/* Export progress */}
+          {exporting && (
+            <ExportProgress progress={exportProgress} status={exportStatus} />
+          )}
+
+          {/* Error */}
+          {metaError && (
+            <div className="query-builder__error">
+              <strong>Error:</strong> {metaError}
+            </div>
+          )}
+
+          {/* AG Grid */}
+          {!metaError && (
+            <div className="ag-theme-alpine qb-ag-grid">
+              <AgGridReact
+                columnDefs={columnDefs}
+                rowModelType="infinite"
+                cacheBlockSize={GRID_PAGE_SIZE}
+                maxBlocksInCache={5}
+                animateRows
+                onGridReady={handleGridReady}
+                defaultColDef={{
+                  sortable: true,
+                  filter: true,
+                  resizable: true,
+                  minWidth: 120,
+                }}
+                overlayNoRowsTemplate={
+                  executing
+                    ? "<span>Running query…</span>"
+                    : "<span>No results</span>"
+                }
+              />
+            </div>
+          )}
         </div>
-      </div>
+      )}
+
+      {/* ── Empty state ───────────────────────────────────────────────────── */}
+      {!canRun && !executing && (
+        <div className="query-builder__empty">
+          <p>
+            Select a left table and drop fields into the Rows or Values zones
+            to build your pivot query, then click <strong>▶ Run</strong>.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

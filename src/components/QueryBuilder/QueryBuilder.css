@@ -1,34 +1,40 @@
- .query-builder {
+/* ─── QueryBuilder.css ───────────────────────────────────────────────────────
+   Pivot Builder — single mode, Monaco editor, AG Grid results, CSV/Excel export
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* ── Root shell ──────────────────────────────────────────────────────────── */
+
+.query-builder {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   padding: 16px;
   flex: 1;
   min-height: 0;
-  height: 100%;
-  overflow: hidden;  
-  box-sizing: border-box;
+  overflow-y: auto;
 }
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
 
 .query-builder__header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 16px;
+  gap: 10px;
   flex-shrink: 0;
 }
 
 .query-builder__header h3 {
   margin: 0 0 4px;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
-  color: #111827;
   letter-spacing: -0.02em;
+  color: #111827;
 }
 
-.query-builder__header p {
+.query-builder__subtitle {
   margin: 0;
-  font-size: 12.5px;
+  font-size: 12px;
   color: #52524e;
   line-height: 1.5;
 }
@@ -40,138 +46,65 @@
   flex-shrink: 0;
 }
 
- 
-.query-builder__body {
+/* ── Builder panels (Join + Pivot side by side) ──────────────────────────── */
+
+.query-builder__builder {
   display: grid;
-  grid-template-columns: 320px 1fr;
-  gap: 16px;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;  
-}
-
- 
-.query-builder__controls {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: 4px;  
-}
-
- 
-.query-builder__preview {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-height: 0;
-  overflow-y: auto;
-}
-
- 
-.builder-card {
-  background: #ffffff;
-  border: 1px solid #e5e5e3;
-  border-radius: 12px;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  box-sizing: border-box;
-}
-
-.builder-accordion {
-  background: #ffffff;
-  border: 1px solid #e5e5e3;
-  border-radius: 12px;
-  overflow: hidden;
+  grid-template-columns: 220px 1fr;
+  gap: 14px;
   flex-shrink: 0;
 }
 
-.builder-accordion-header {
-  width: 100%;
-  height: 46px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 14px;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-  background: #fafafa;
-  border: none;
-  border-bottom: 1px solid transparent;
-  transition: background 0.15s ease;
+@media (max-width: 780px) {
+  .query-builder__builder {
+    grid-template-columns: 1fr;
+  }
 }
 
-.builder-accordion-header:hover {
-  background: #f5f5f5;
-}
-
-.builder-accordion-body {
-  padding: 12px;
+.builder-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  border-top: 1px solid #e5e5e3;
-  background: #ffffff;
+  gap: 8px;
 }
 
-.builder-card__title {
-  font-size: 11px;
+.builder-panel__section-label {
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #52524e;
+  color: #a1a1aa;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #f0f0ee;
 }
 
-.builder-card__grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+.builder-panel--pivot {
   gap: 10px;
 }
 
-.builder-card__item {
-  display: flex;
-  flex-direction: column;
+.builder-panel__pivot-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
-  min-width: 0;
 }
 
-.builder-card__row {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+@media (max-width: 600px) {
+  .builder-panel__pivot-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
-.builder-card__row label {
-  font-size: 11px;
-  color: #52524e;
-  font-weight: 600;
-}
+/* ── Drop Zone ───────────────────────────────────────────────────────────── */
 
-.builder-card__row select {
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid #d6d3d1;
-  background: #fbfbfb;
-  font-size: 12px;
-  outline: none;
-  width: 100%;
-}
- 
 .builder-dropzone {
-  min-height: 58px;
-  padding: 10px;
-  border-radius: 10px;
-  border: 2px dashed #d1d5db;
+  min-height: 56px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1.5px dashed #d1d5db;
   background: #fafafa;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  box-sizing: border-box;
+  gap: 7px;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
 }
 
 .builder-dropzone:hover {
@@ -181,67 +114,73 @@
 .builder-dropzone[data-dragging-over="true"] {
   border-color: #2563eb;
   background: #eff6ff;
-  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
 .builder-dropzone__label {
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: rgb(29, 78, 216);
 }
 
 .builder-dropzone__placeholder {
-  font-size: 12px;
-  color: #6b7280;
-  font-style: italic;
+  font-size: 11px;
+  color: #9ca3af;
 }
 
 .builder-dropzone__chip {
   display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  background: #ffffff;
-  border: 1px solid #e5e5e3;
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 11.5px;
-  color: #1a1a18;
-  font-family: 'Fira Code', monospace;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  gap: 5px;
+  background: #fff;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 11px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
 .builder-dropzone__chip button {
   border: none;
   background: transparent;
-  color: #a8a7a2;
-  font-size: 14px;
+  color: #9ca3af;
+  font-size: 13px;
   line-height: 1;
   cursor: pointer;
-  padding: 0 2px;
-  transition: color 0.1s ease;
+  padding: 0;
 }
 
 .builder-dropzone__chip button:hover {
-  color: #dc2626;
+  color: #374151;
 }
 
 .builder-dropzone__badge {
   background: #eff6ff;
   color: #1d4ed8;
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-size: 9.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
   font-weight: 700;
-  font-family: 'Fira Code', 'Cascadia Code', monospace;
 }
- 
-.builder-agg-list {
-  display: grid;
-  gap: 6px;
-  margin-top: 4px;
+
+/* ── Aggregation panel ───────────────────────────────────────────────────── */
+
+.builder-agg-panel {
+  border: 1px solid #e5e7eb;
+  border-radius: 9px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.builder-agg-panel__label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #52524e;
 }
 
 .builder-agg-item {
@@ -249,72 +188,270 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 6px 10px;
-  border-radius: 8px;
+  padding: 6px 9px;
   background: #f8fafc;
-  font-size: 11.5px;
-  color: #52524e;
-  font-family: 'Fira Code', monospace;
-  border: 1px solid #f1f5f9;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.builder-agg-item__name {
+  color: #374151;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  font-size: 11px;
 }
 
 .builder-agg-item select {
-  padding: 4px 6px;
-  border-radius: 6px;
+  padding: 5px 8px;
+  border-radius: 7px;
   border: 1px solid #d6d3d1;
-  background: #ffffff;
-  font-size: 11px;
-  font-family: 'Inter', sans-serif;
-  font-weight: 500;
-  outline: none;
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
 }
 
- 
-.builder-card--sql {
-  border-radius: 14px;
+/* ── Monaco SQL card ─────────────────────────────────────────────────────── */
+
+.query-builder__sql-card {
+  background: #fff;
+  border: 1px solid #e5e5e3;
+  border-radius: 8px;
   overflow: hidden;
-  border: 1px solid #e5e7eb;
-  background: #ffffff;
+  flex-shrink: 0;
+}
 
+.qb-cell-bar {
   display: flex;
-  flex-direction: column;
-  flex: 0 0 380px;       
-  max-height: 45vh;      
-  min-height: 280px;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  background: #fafafa;
+  border-bottom: 1px solid #e5e5e3;
+  gap: 10px;
 }
 
-.builder-card--sql .monaco-editor {
-  border-top: 1px solid #f5f5f4;
-  padding-top: 8px;
+.qb-cell-bar__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2563eb;
 }
 
-.sql-action-bar {
+.qb-cell-bar__muted {
+  color: #a3a3a3;
+  font-weight: 400;
+}
+
+.qb-edited-badge {
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.qb-cell-bar__actions {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.btn-primary,
-.btn-secondary {
+.qb-run-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 14px;
+  background: #18181b;
+  color: #fff;
   border: none;
   border-radius: 6px;
-  padding: 3px 6px;
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-  height: 32px;
-  box-sizing: border-box;
+  transition: opacity 0.15s;
+}
+
+.qb-run-btn:hover    { opacity: 0.85; }
+.qb-run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.qb-monaco-wrapper {
+  background: #fafafa;
+  border-top: 1px solid #f0f0ee;
+}
+
+/* ── Results card ────────────────────────────────────────────────────────── */
+
+.query-builder__results-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.qb-results-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.qb-results-toolbar__exports {
+  display: flex;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.qb-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: #52524e;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+  padding: 6px 12px;
+  flex: 1;
+}
+
+.qb-status-bar__msg {
+  color: #16a34a;
+  font-weight: 600;
+}
+
+/* ── Export progress ─────────────────────────────────────────────────────── */
+
+.qb-export-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  padding: 9px 12px;
+}
+
+.qb-export-progress__label {
+  font-size: 12px;
+  color: #166534;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.qb-export-progress__track {
+  flex: 1;
+  height: 5px;
+  background: #dcfce7;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.qb-export-progress__fill {
+  height: 100%;
+  background: #16a34a;
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+.qb-export-progress__pct {
+  font-size: 12px;
+  font-weight: 700;
+  color: #166534;
+  white-space: nowrap;
+  min-width: 34px;
+  text-align: right;
+}
+
+/* ── Error ───────────────────────────────────────────────────────────────── */
+
+.query-builder__error {
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: #b91c1c;
+}
+
+/* ── AG Grid ─────────────────────────────────────────────────────────────── */
+
+.qb-ag-grid {
+  width: 100%;
+  height: 380px;
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 12px;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+.qb-ag-grid .ag-header {
+  background: #f9fafb;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #52524e;
+}
+
+.qb-ag-grid .ag-row-even  { background: #fff; }
+.qb-ag-grid .ag-row-odd   { background: #fafafa; }
+.qb-ag-grid .ag-row:hover { background: #f0f9ff; }
+
+.qb-ag-grid .ag-cell {
+  font-size: 12px;
+  color: #111;
+  border-right: 1px solid #f3f4f6;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────────── */
+
+.query-builder__empty {
+  text-align: center;
+  padding: 22px 16px;
+  border: 1px dashed #e5e7eb;
+  border-radius: 10px;
+  background: #fafafa;
+}
+
+.query-builder__empty p {
+  font-size: 12px;
+  color: #9ca3af;
+  line-height: 1.6;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+/* ── Shared buttons ──────────────────────────────────────────────────────── */
+
+.btn-primary,
+.btn-secondary {
+  border-radius: 7px;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+  white-space: nowrap;
 }
 
 .btn-primary {
-  background: #18181b;
-  color: #ffffff;
+  background: #111827;
+  color: #fff;
+  border: none;
 }
 
-.btn-primary:hover:not(:disabled) {
-  background: #3f3f46;
-}
+.btn-primary:hover    { opacity: 0.85; }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .btn-secondary {
   background: #f4f4f5;
@@ -322,41 +459,11 @@
   border: 1px solid #e4e4e7;
 }
 
-.btn-secondary:hover:not(:disabled) {
-  background: #e4e4e7;
-}
+.btn-secondary:hover    { background: #ebebec; }
+.btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.btn-primary:disabled,
-.btn-secondary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
 
-.query-error {
-  color: #b91c1c;
-  background: #fee2e2;
-  border: 1px solid #fecaca;
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-size: 12px;
-  font-family: 'Fira Code', monospace;
-  margin-top: 8px;
-}
-
- 
-@media (max-width: 1120px) {
-  .query-builder__body {
-    grid-template-columns: 1fr;  
-    overflow-y: auto;          
-  }
-
-  .query-builder__controls,
-  .query-builder__preview {
-    overflow-y: visible;        
-    height: auto;
-  }
-  
-  .query-builder {
-    overflow: auto;          
-  }
-}
+.query-builder::-webkit-scrollbar       { width: 6px; }
+.query-builder::-webkit-scrollbar-track { background: transparent; }
+.query-builder::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 999px; }

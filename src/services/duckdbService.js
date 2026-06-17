@@ -50,7 +50,7 @@ export async function registerBufferAndCreateTable(fileName, buffer) {
   const tableName = fileNameToTable(fileName);
   await db.registerFileBuffer(fileName, new Uint8Array(buffer));
 
-  // ── 🎯 OPTIMIZED: all_varchar = true guarantees seamless type rehydration on mutated files ──
+  // ── 🎯 all_varchar = true guarantees seamless type rehydration on mutated files ──
   await conn.query(`
     CREATE OR REPLACE TABLE "${tableName}" AS
     SELECT * FROM read_csv_auto('${fileName}', header = true, all_varchar = true)
@@ -130,7 +130,12 @@ export async function getTableCSVBuffer(tableName) {
   
   await conn.query(`COPY "${tableName}" TO '${tempFile}' (HEADER, DELIMITER ',');`);
   const u8Array = await db.copyFileToBuffer(tempFile);
-  await db.dropFile(tempFile);
   
-  return u8Array.buffer;
+  // ── 🎯 FIXED: Slice the buffer memory immediately upon retrieval ──
+  // This extracts a completely independent array copy out of WebAssembly memory
+  // space before dropping the temp VFS asset or passing it to the main thread.
+  const safeMainThreadBuffer = u8Array.buffer.slice(0);
+  
+  await db.dropFile(tempFile);
+  return safeMainThreadBuffer;
 }

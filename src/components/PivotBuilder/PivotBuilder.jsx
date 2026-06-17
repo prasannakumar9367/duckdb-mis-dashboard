@@ -1,295 +1,360 @@
-import { useState, useMemo } from "react";
-import PivotDropZone from "./PivotDropZone";
-import { buildPivot, formatValue, AGGREGATIONS } from "./pivotUtils";
+import { useEffect, useState, useCallback, useMemo } from "react";
+import { AgGridReact } from "ag-grid-react";
+import { runQuery } from "../../services/duckdbService";
+import * as XLSX from "xlsx";
 import "./PivotBuilder.css";
 
-export default function PivotBuilder({ data = [], columns = [], onClose }) {
-  const [rowField, setRowField] = useState(null);
-  const [colField, setColField] = useState(null);
-  const [valueField, setValueField] = useState(null);
-  const [aggFn, setAggFn] = useState("SUM");
-  const pivot = useMemo(
-    () => buildPivot(data, rowField, colField, valueField, aggFn),
-    [data, rowField, colField, valueField, aggFn],
-  );
+const DPD_OPTIONS = [
+  { label: "Full Portfolio", value: "full" },
+  { label: "0 DPD", value: "0dpd" },
+  { label: "0-30 DPD", value: "0-30dpd" },
+  { label: "0-90 DPD", value: "0-90dpd" },
+];
 
-  const startDrag = (e, col) => {
-    e.dataTransfer.setData("text/plain", col);
-    e.dataTransfer.effectAllowed = "move";
-  };
+const CURRENCY_FORMATTER = new Intl.NumberFormat("en-IN", {
+  style: "currency",
+  currency: "INR",
+  maximumFractionDigits: 2,
+});
 
+function formatCurrency(value) {
+  if (value === null || value === undefined) return "—";
+  const num = Number(value);
+  if (isNaN(num)) return String(value);
+  
+  if (num >= 1e7) {
+    return `₹${(num / 1e7).toFixed(2)} Cr`;
+  }
+  if (num >= 1e5) {
+    return `₹${(num / 1e5).toFixed(2)} L`;
+  }
+  return CURRENCY_FORMATTER.format(num);
+}
 
-  const exportCSV = () => {
-    if (!pivot) return;
-    const { rowKeys, colKeys, cells, rowTotals, colTotals, grandTotal } = pivot;
-    const header = ["", ...colKeys, "Total"].join(",");
-    const rows = rowKeys.map((rk) => {
-      const vals = colKeys.map((ck) => cells[rk]?.[ck] ?? "");
-      return [rk, ...vals, rowTotals[rk] ?? ""].join(",");
-    });
-    const totalsRow = [
-      "Total",
-      ...colKeys.map((ck) => colTotals[ck] ?? ""),
-      grandTotal ?? "",
-    ].join(",");
-    const csv = [header, ...rows, totalsRow].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `pivot_${aggFn.toLowerCase()}_${valueField ?? "data"}.csv`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  };
-
-  const activeFields = new Set(
-    [rowField, colField, valueField].filter(Boolean),
-  );
-
+function MoMDeltaRenderer(props) {
+  const { value, data } = props;
+  if (value === null || value === undefined) return "—";
+  
+  const current = Number(value);
+  const previous = data?.previous_month_collection_pct ? Number(data.previous_month_collection_pct) : null;
+  
+  if (previous === null) return `${current.toFixed(2)}%`;
+  
+  let color = "#6b7280";
+  let prefix = "—";
+  
+  if (current > previous) {
+    color = "#15803d";
+    prefix = "▲";
+  } else if (current < previous) {
+    color = "#b91c1c";
+    prefix = "▼";
+  }
+  
   return (
-    <div className="pivot-overlay" role="dialog" aria-label="Pivot Builder">
-      <div className="pivot-panel">
-        <div className="pivot-header">
-          <div className="pivot-header__left">
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.6"
-            >
-              <rect x="1" y="1" width="6" height="6" rx="1" />
-              <rect x="9" y="1" width="6" height="6" rx="1" />
-              <rect x="1" y="9" width="6" height="6" rx="1" />
-              <rect x="9" y="9" width="6" height="6" rx="1" />
-            </svg>
-            <span>Pivot Builder</span>
-            <span className="pivot-header__rows">
-              {data.length.toLocaleString()} rows
-            </span>
-          </div>
-          <div className="pivot-header__right">
-            {pivot && (
-              <button
-                className="pivot-btn pivot-btn--ghost"
-                onClick={exportCSV}
-                title="Export pivot as CSV"
-              >
-                <svg
-                  width="11"
-                  height="11"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                >
-                  <path
-                    d="M8 2v9M4 8l4 4 4-4"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <path d="M2 14h12" strokeLinecap="round" />
-                </svg>
-                Export
-              </button>
-            )}
-            <button
-              className="pivot-btn pivot-btn--close"
-              onClick={onClose}
-              aria-label="Close pivot builder"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-
-        <div className="pivot-body">
-          <div className="pivot-config">
-            <div className="pivot-config__section-label">Columns</div>
-            <div className="pivot-field-list">
-              {columns.map((col) => (
-                <div
-                  key={col}
-                  className={`pivot-field${activeFields.has(col) ? " pivot-field--active" : ""}`}
-                  draggable
-                  onDragStart={(e) => startDrag(e, col)}
-                  onDragEnd={() => {}}
-                  title={`Drag "${col}" to a zone`}
-                >
-                  <svg
-                    width="9"
-                    height="9"
-                    viewBox="0 0 9 12"
-                    fill="currentColor"
-                    opacity=".4"
-                  >
-                    <circle cx="2.5" cy="2" r="1.2" />
-                    <circle cx="6.5" cy="2" r="1.2" />
-                    <circle cx="2.5" cy="6" r="1.2" />
-                    <circle cx="6.5" cy="6" r="1.2" />
-                    <circle cx="2.5" cy="10" r="1.2" />
-                    <circle cx="6.5" cy="10" r="1.2" />
-                  </svg>
-                  {col}
-                </div>
-              ))}
-            </div>
-
-            <div
-              className="pivot-config__section-label"
-              style={{ marginTop: 16 }}
-            >
-              Aggregation
-            </div>
-            <div className="pivot-agg-select-wrap">
-              <select
-                className="pivot-agg-select"
-                value={aggFn}
-                onChange={(e) => setAggFn(e.target.value)}
-              >
-                {AGGREGATIONS.map((fn) => (
-                  <option key={fn} value={fn}>
-                    {fn}
-                  </option>
-                ))}
-              </select>
-              <svg
-                width="10"
-                height="10"
-                viewBox="0 0 10 10"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                className="pivot-select-caret"
-              >
-                <path
-                  d="M2 3.5l3 3 3-3"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </div>
-
-            <div className="pivot-zones">
-              <PivotDropZone
-                label="Rows"
-                field={rowField}
-                onDrop={setRowField}
-                onClear={() => setRowField(null)}
-                accent="#3b82f6"
-              />
-              <PivotDropZone
-                label="Columns"
-                field={colField}
-                onDrop={setColField}
-                onClear={() => setColField(null)}
-                accent="#8b5cf6"
-              />
-              <PivotDropZone
-                label="Values"
-                field={valueField}
-                onDrop={setValueField}
-                onClear={() => setValueField(null)}
-                accent="#10b981"
-              />
-            </div>
-
-            {(!rowField || !valueField) && (
-              <p className="pivot-hint">
-                Drag columns into <strong>Rows</strong> and{" "}
-                <strong>Values</strong> to build a pivot.
-              </p>
-            )}
-          </div>
-
-          <div className="pivot-result">
-            {pivot ? (
-              <div className="pivot-table-container">
-                <PivotTable
-                  pivot={pivot}
-                  aggFn={aggFn}
-                  rowField={rowField}
-                  colField={colField}
-                />
-              </div>
-            ) : (
-              <div className="pivot-empty">
-                <svg
-                  width="32"
-                  height="32"
-                  viewBox="0 0 32 32"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.2"
-                  opacity=".25"
-                >
-                  <rect x="2" y="2" width="12" height="12" rx="2" />
-                  <rect x="18" y="2" width="12" height="12" rx="2" />
-                  <rect x="2" y="18" width="12" height="12" rx="2" />
-                  <rect x="18" y="18" width="12" height="12" rx="2" />
-                </svg>
-                <span>Set Rows + Values to see results</span>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+    <div style={{ color, fontWeight: "500" }}>
+      {prefix} {current.toFixed(2)}%
     </div>
   );
 }
 
-function PivotTable({ pivot, aggFn, rowField, colField }) {
-  const { rowKeys, colKeys, cells, colTotals, rowTotals, grandTotal } = pivot;
+function buildPivotSQL({
+  selectedTable,
+  bifurcationField,
+  dpdFilter,
+  tableColumns = [],
+}) {
+  if (!selectedTable || !bifurcationField) {
+    return null;
+  }
+
+  const hasColumn = (colName) =>
+    tableColumns.some((c) => c.name.toLowerCase() === colName.toLowerCase());
+
+  let dpdWhere = "";
+  switch (dpdFilter) {
+    case "0dpd":
+      dpdWhere = " WHERE CAST(dpd AS INT) = 0";
+      break;
+    case "0-30dpd":
+      dpdWhere = " WHERE CAST(dpd AS INT) BETWEEN 0 AND 30";
+      break;
+    case "0-90dpd":
+      dpdWhere = " WHERE CAST(dpd AS INT) BETWEEN 0 AND 90";
+      break;
+    default:
+      dpdWhere = "";
+  }
+
+  const demandExpr = [];
+  if (hasColumn("installment_amount")) demandExpr.push("installment_amount");
+  if (hasColumn("total_due_amount")) demandExpr.push("total_due_amount");
+  if (!demandExpr.length) demandExpr.push("0");
+  const demand = `COALESCE(${demandExpr.join(", ")}, 0)`;
+
+  const collectionExpr = [];
+  if (hasColumn("collection_amount")) collectionExpr.push("collection_amount");
+  if (hasColumn("total_amount_collected")) collectionExpr.push("total_amount_collected");
+  if (!collectionExpr.length) collectionExpr.push("0");
+  const collection = `COALESCE(${collectionExpr.join(", ")}, 0)`;
+
+  const paidTag = () => {
+    if (dpdFilter === "0dpd" || dpdFilter === "0-30dpd") {
+      return `CASE 
+        WHEN ${collection} >= total_due_amount THEN 'Paid' 
+        WHEN ${collection} > 0 THEN 'Partial' 
+        ELSE 'Not Paid' 
+      END`;
+    }
+    return `CASE 
+      WHEN ${collection} >= installment_amount THEN 'Paid' 
+      WHEN ${collection} > 0 THEN 'Partial' 
+      ELSE 'Not Paid' 
+    END`;
+  };
+
+  const sql = `
+WITH pivot_data AS (
+  SELECT
+    "${bifurcationField}" AS row_group,
+    SUM(${demand}) AS total_demand,
+    SUM(${collection}) AS total_collection,
+    ROUND(SUM(${collection}) / NULLIF(SUM(${demand}), 0) * 100, 2) AS collection_pct,
+    ${paidTag()} AS payment_status
+  FROM "${selectedTable}"
+  ${dpdWhere}
+  GROUP BY "${bifurcationField}"
+),
+final_paid_list AS (
+  SELECT DISTINCT loan_number FROM "${selectedTable}"
+  WHERE payment_status = 'PAID'
+)
+SELECT
+  row_group,
+  total_demand,
+  total_collection,
+  collection_pct,
+  CASE 
+    WHEN row_group IN (SELECT loan_number FROM final_paid_list) 
+    THEN 'PAID' 
+    ELSE payment_status 
+  END AS payment_status
+FROM pivot_data
+ORDER BY row_group
+`;
+
+  return sql.trim();
+}
+
+export default function PivotBuilder({ tables = [], dbReady = false }) {
+  const [selectedTable, setSelectedTable] = useState("");
+  const [tableColumns, setTableColumns] = useState([]);
+  const [bifurcationField, setBifurcationField] = useState("");
+  const [dpdFilter, setDpdFilter] = useState("full");
+  const [gridApi, setGridApi] = useState(null);
+  const [columnDefs, setColumnDefs] = useState([]);
+  const [rowData, setRowData] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    async function loadTableColumns() {
+      if (!selectedTable || !dbReady) {
+        setTableColumns([]);
+        setBifurcationField("");
+        return;
+      }
+
+      try {
+        const describeSql = `DESCRIBE "${selectedTable}"`;
+        const result = await runQuery(describeSql);
+        setTableColumns(result);
+        if (result.length > 0) {
+          setBifurcationField(result[0].name);
+        }
+      } catch (err) {
+        console.error("Failed to load table columns:", err);
+        setError("Failed to load table columns");
+        setTableColumns([]);
+      }
+    }
+
+    loadTableColumns();
+  }, [selectedTable, dbReady]);
+
+  const generatedSQL = useMemo(() => {
+    return buildPivotSQL({
+      selectedTable,
+      bifurcationField,
+      dpdFilter,
+      tableColumns,
+    });
+  }, [selectedTable, bifurcationField, dpdFilter, tableColumns]);
+
+  const handleGenerate = async () => {
+    if (!generatedSQL) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const results = await runQuery(generatedSQL);
+      setRowData(results);
+
+      if (results.length > 0) {
+        const keys = Object.keys(results[0]);
+        const defs = keys.map((key) => {
+          const colDef = {
+            field: key,
+            sortable: true,
+            filter: true,
+            resizable: true,
+            minWidth: 120,
+          };
+
+          if (
+            key === "total_demand" ||
+            key === "total_collection"
+          ) {
+            colDef.valueFormatter = (params) => formatCurrency(params.value);
+          } else if (key === "collection_pct") {
+            colDef.cellRenderer = MoMDeltaRenderer;
+          }
+
+          return colDef;
+        });
+        setColumnDefs(defs);
+      }
+    } catch (err) {
+      console.error("Query failed:", err);
+      setError(err?.message || "Query execution failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleExport = () => {
+    if (!rowData.length || !selectedTable) return;
+
+    const wsData = rowData.map((row) =>
+      Object.keys(row).reduce((acc, key) => {
+        const val = row[key];
+        if (key === "total_demand" || key === "total_collection") {
+          acc[key] = formatCurrency(val);
+        } else {
+          acc[key] = val;
+        }
+        return acc;
+      }, {})
+    );
+
+    const ws = XLSX.utils.json_to_sheet(wsData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "MIS Report");
+
+    const dpdLabel = DPD_OPTIONS.find((opt) => opt.value === dpdFilter)?.label || dpdFilter;
+    const fileName = `MIS_Report_${selectedTable}_${dpdLabel}_${new Date().toISOString().split("T")[0]}.xlsx`;
+
+    XLSX.writeFile(wb, fileName);
+  };
 
   return (
-    <div className="pivot-table-wrap">
-      <table className="pivot-table">
-        <thead>
-          <tr>
-            <th className="pivot-th pivot-th--corner">
-              {rowField}
-              {colField && <span className="pivot-th-sub"> / {colField}</span>}
-            </th>
-            {colKeys.map((ck) => (
-              <th key={ck} className="pivot-th pivot-th--col">
-                {ck}
-              </th>
+    <div className="pivot-builder">
+      <div className="pivot-builder__header">
+        <h3>Pivot Builder</h3>
+        <p>Configure MIS report parameters and generate demand vs collection analysis.</p>
+      </div>
+
+      <div className="pivot-builder__toolbar">
+        <div className="toolbar-group">
+          <label>Target Table</label>
+          <select
+            value={selectedTable}
+            onChange={(e) => setSelectedTable(e.target.value)}
+            disabled={!dbReady}
+          >
+            <option value="">— Select table —</option>
+            {tables.map((t) => (
+              <option key={t.name} value={t.name}>
+                {t.name}
+              </option>
             ))}
-            <th className="pivot-th pivot-th--total">Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rowKeys.map((rk, ri) => (
-            <tr
-              key={rk}
-              className={ri % 2 === 0 ? "pivot-tr--even" : "pivot-tr--odd"}
-            >
-              <td className="pivot-td pivot-td--row-label">{rk}</td>
-              {colKeys.map((ck) => (
-                <td key={ck} className="pivot-td pivot-td--value">
-                  {formatValue(cells[rk]?.[ck], aggFn)}
-                </td>
-              ))}
-              <td className="pivot-td pivot-td--row-total">
-                {formatValue(rowTotals[rk], aggFn)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr className="pivot-tfoot-row">
-            <td className="pivot-td pivot-td--footer-label">Total</td>
-            {colKeys.map((ck) => (
-              <td key={ck} className="pivot-td pivot-td--col-total">
-                {formatValue(colTotals[ck], aggFn)}
-              </td>
+          </select>
+        </div>
+
+        <div className="toolbar-group">
+          <label>Bifurcation Dimension</label>
+          <select
+            value={bifurcationField}
+            onChange={(e) => setBifurcationField(e.target.value)}
+            disabled={!selectedTable || tableColumns.length === 0}
+          >
+            <option value="">— Select field —</option>
+            {tableColumns.map((col) => (
+              <option key={col.name} value={col.name}>
+                {col.name}
+              </option>
             ))}
-            <td className="pivot-td pivot-td--grand-total">
-              {formatValue(grandTotal, aggFn)}
-            </td>
-          </tr>
-        </tfoot>
-      </table>
+          </select>
+        </div>
+
+        <div className="toolbar-group">
+          <label>DPD Filter</label>
+          <select value={dpdFilter} onChange={(e) => setDpdFilter(e.target.value)}>
+            {DPD_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="toolbar-actions">
+          <button
+            className="btn-primary"
+            onClick={handleGenerate}
+            disabled={!generatedSQL || loading}
+          >
+            {loading ? "Generating..." : "Generate Report"}
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={handleExport}
+            disabled={!rowData.length}
+          >
+            Export Excel
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="pivot-builder__error">
+          <strong>Error:</strong> {error}
+        </div>
+      )}
+
+      <div className="pivot-builder__grid-container">
+        {rowData.length > 0 ? (
+          <div className="ag-theme-alpine" style={{ width: "100%", height: "500px" }}>
+            <AgGridReact
+              rowData={rowData}
+              columnDefs={columnDefs}
+              defaultColDef={{
+                sortable: true,
+                filter: true,
+                resizable: true,
+                minWidth: 120,
+              }}
+              animateRows
+              onGridReady={(params) => setGridApi(params.api)}
+            />
+          </div>
+        ) : (
+          <div className="pivot-builder__empty">
+            <p>Configure parameters and click "Generate Report" to view results.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

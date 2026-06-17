@@ -30,7 +30,7 @@ export default function Notebook() {
     updateCellError,
     recordHistory,
     runMutation,
-    persistTableChanges // ── 🎯 FIXED: Destructured context hook passed to props ──
+    persistTableChanges 
   } = useNotebook();
 
   const [mode, setMode] = useState("pivot");
@@ -61,6 +61,7 @@ export default function Notebook() {
     },
   ]);
 
+  // ─── STABLE MEMOIZED ALIAS BRIDGES ─────────────────────────────────────────
   const parseFieldId = useCallback((id) => {
     if (typeof id !== "string") return null;
     const [table, ...columnParts] = id.split("|");
@@ -105,6 +106,7 @@ export default function Notebook() {
     });
   }, []);
 
+  // ─── STABLE MEMOIZED QUERY RUNNER REFERENCE ────────────────────────────────
   const handleVLookupQuery = useCallback((sqlText) => {
     return executeQuery(null, sqlText);
   }, [executeQuery]);
@@ -116,6 +118,7 @@ export default function Notebook() {
     return () => clearTimeout(timer);
   }, []);
 
+  // ─── ACTIVE METADATA DATA VALIDATION SYSTEM ────────────────────────────────
   useEffect(() => {
     if (isInitializingRef.current) return;
     if (isSwappingRef.current) return;
@@ -183,6 +186,20 @@ export default function Notebook() {
         case "vlookup-return":
           addVLookupField(field, setReturnField);
           break;
+        
+        // ── 🎯 FIXED: Explicit interception case for the parent filter zone container drop ──
+        case "vlookup-where-zone":
+          setWhereConditions((prev) => {
+            const emptyIndex = prev.findIndex((c) => !c.table && !c.column);
+            if (emptyIndex !== -1) {
+              const next = [...prev];
+              next[emptyIndex] = { ...next[emptyIndex], table: field.table, column: field.column };
+              return next;
+            }
+            return [...prev, { connector: "AND", table: field.table, column: field.column, operator: "=", value: "" }];
+          });
+          break;
+
         case "pivot-rows":
           addPivotField(field, setRowFields);
           break;
@@ -248,7 +265,7 @@ export default function Notebook() {
       },
     ]);
     
-    indexedDB.open("VLookupWorkspaceDB", 1).onsuccess = (e) => {
+    indexedDB.open("VLookupWorkspaceDB", 2).onsuccess = (e) => {
       const db = e.target.result;
       if (db.objectStoreNames.contains("cached_grids")) {
         const tx = db.transaction("cached_grids", "readwrite");
@@ -378,7 +395,7 @@ export default function Notebook() {
                   setWhereConditions={setWhereConditions}
                   runQuery={handleVLookupQuery} 
                   runMutation={runMutation}
-                  persistTableChanges={persistTableChanges} // ── 🎯 FIXED: Wired persistence function to props ──
+                  persistTableChanges={persistTableChanges} 
                   autoExecuteTrigger={autoExecuteSignal}
                 />
               )}

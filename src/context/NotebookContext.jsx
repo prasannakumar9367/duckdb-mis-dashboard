@@ -3,12 +3,12 @@ import {
   useState,
   useEffect,
   useCallback,
+  useContext,
   useRef,
 } from "react";
 
 import {
   initDB,
-  registerAndCreateTable,
   registerBufferAndCreateTable,
   fileNameToTable,
   runQuery,
@@ -35,211 +35,257 @@ const DEFAULT_CELLS = [
 
 const NotebookContext = createContext(null);
 
+export function useNotebook() {
+  return useContext(NotebookContext);
+}
+
 export function NotebookProvider({ children }) {
   const [dbReady, setDbReady] = useState(false);
   const [dbError, setDbError] = useState(null);
   const [restoring, setRestoring] = useState(true);
   const [uploadingFiles, setUploadingFiles] = useState(false);
-
-  // ── 🎯 REAL-TIME LOCAL BYTE UPLOAD PROGRESS TRACKING STATES ────────────────
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState("");
 
-  const [files, setFiles] = useState([]);    
-  const [tables, setTables] = useState([]);    
+  const [files, setFiles] = useState([]);
+  const [tables, setTables] = useState([]);
   const [cells, setCells] = useState(DEFAULT_CELLS);
   const [pivotConfig, setPivotConfig] = useState(null);
 
   const debounceTimer = useRef(null);
 
-  // ─── WORKSPACE REHYDRATION LIFECYCLE ──────────────────────────────────────
+  const normalizeFileDescriptor = useCallback((descriptor) => {
+    if (!descriptor) return "";
+    return typeof descriptor === "string" ? descriptor : descriptor.name || "";
+  }, []);
+
+  const normalizeTableKey = useCallback((fileName) => fileNameToTable(String(fileName)), []);
+
   useEffect(() => {
     async function bootstrap() {
       try {
         await initDB();
-      } catch (e) {
-        setDbError(e.message);
+      } catch (error) {
+        setDbError(error?.message || String(error));
         setRestoring(false);
         return;
       }
 
       try {
-        const storedCSVs = await loadAllCSVBuffers();
+        const savedFilesState = (await loadState("files")) || [];
+        const normalizedSavedFiles = Array.isArray(savedFilesState)
+          ? savedFilesState.map((entry) => {
+              if (typeof entry === "string") {
+                return {
+                  id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                  name: entry,
+                };
+              }
+              return {
+                id: entry.id || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                ...entry,
+              };
+            })
+          : [];
+
+        const restoreKeys = new Set(normalizedSavedFiles.map((file) => normalizeTableKey(file.name)));
+
+        const storedCSVBinaries = await loadAllCSVBuffers();
         const restoredTables = [];
 
-        const savedFilesList = await loadState("files"); 
-        
-        // ── 🎯 FIXED: Map allowed items to standardized table tokens to eliminate case mismatches ──
-        const allowedNames = new Set(
-          Array.isArray(savedFilesList)
-            ? savedFilesList.map((f) => fileNameToTable(typeof f === "string" ? f : f.name))
-            : []
-        );
+        for (const record of storedCSVBinaries) {
+          const fileName = record.name;
+          const tableKey = normalizeTableKey(fileName);
 
-        // Re-populate all database memory tables before unlocking the UI interface view
-        for (const { name, buffer } of storedCSVs) {
-          const tableKey = fileNameToTable(name);
-          if (allowedNames.size > 0 && !allowedNames.has(tableKey)) {
-            console.warn(`[restore] Skipping orphaned CSV buffer "${name}"`);
+          if (restoreKeys.size > 0 && !restoreKeys.has(tableKey)) {
+            console.warn(`[bootstrap] Skipping orphaned buffer ${fileName}`);
             continue;
           }
+
           try {
-            const meta = await registerBufferAndCreateTable(name, buffer);
+            const meta = await registerBufferAndCreateTable(fileName, record.buffer);
             restoredTables.push(meta);
-          } catch (err) {
-            console.warn(`[restore] Could not rebuild table from "${name}":`, err);
+          } catch (error) {
+            console.warn(`[bootstrap] Failed to restore ${fileName}:`, error);
           }
         }
 
-        const savedFiles = await loadState("files");
-        if (Array.isArray(savedFiles) && savedFiles.length > 0) {
-          setFiles(savedFiles);
+        if (normalizedSavedFiles.length > 0) {
+          setFiles(normalizedSavedFiles);
         }
 
         if (restoredTables.length > 0) {
           setTables(restoredTables);
-          await saveState("tables", restoredTables);
-        } else {
-          const savedTables = await loadState("tables");
-          if (Array.isArray(savedTables) && savedTables.length > 0) {
-            setTables(savedTables);
-          }
+          saveState("tables", restoredTables).catch(() => {});
         }
 
         const savedCells = await loadState("cells");
         if (Array.isArray(savedCells) && savedCells.length > 0) {
           setCells(savedCells);
         }
-        
+
         setDbReady(true);
-      } catch (err) {
-        console.warn("[restore] IndexedDB restore failed:", err);
-        setDbReady(true); 
+      } catch (error) {
+        console.warn("[bootstrap] restore failed:", error);
+        setDbReady(true);
       } finally {
         setRestoring(false);
       }
     }
 
     bootstrap();
-  }, []);
+  }, [normalizeTableKey]);
 
-  // ─── STATE STORAGE PERSISTENCE ─────────────────────────────────────────────
   const persistCells = useCallback((updatedCells) => {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
       const slim = updatedCells.map(({ id, query, columns, error, elapsed }) => ({
-        id, query, columns, error, elapsed,
+        id,
+        query,
+        columns,
+        error,
+        elapsed,
       }));
       saveState("cells", slim).catch(() => {});
     }, 400);
   }, []);
 
-  // ─── HIGH-PERFORMANCE PROGRESSIVE FILE INGESTION CONTROLLER ────────────────
   const handleUpload = useCallback(async (fileList) => {
+    if (!fileList || fileList.length === 0) return;
+
     setUploadingFiles(true);
     setUploadProgress(0);
-    setUploadStatus("Initializing local stream...");
-    
-    try {
-      const newFiles = [];
-      const newTables = [];
+    setUploadStatus("Preparing upload...");
 
-      for (const file of Array.from(fileList)) {
+    try {
+      const incomingFiles = Array.from(fileList);
+      const uploadedFiles = [];
+      const uploadedTables = [];
+
+      for (let index = 0; index < incomingFiles.length; index += 1) {
+        const file = incomingFiles[index];
+        const fileName = normalizeFileDescriptor(file);
+        const tableKey = normalizeTableKey(fileName);
+
+        setUploadStatus(`Streaming ${fileName}...`);
+        setUploadProgress(0);
+
         const rawBuffer = await new Promise((resolve, reject) => {
           const reader = new FileReader();
-          
+
           reader.onprogress = (event) => {
             if (event.lengthComputable) {
-              const percentage = Math.round((event.loaded / event.total) * 100);
-              setUploadProgress(Math.min(percentage, 99));
-              setUploadStatus(`Reading bytes: ${percentage}%`);
+              const percent = Math.round((event.loaded / event.total) * 100);
+              setUploadProgress(Math.min(Math.max(percent, 0), 100));
+              setUploadStatus(`Streaming ${fileName}...`);
             }
           };
 
           reader.onload = () => resolve(reader.result);
-          reader.onerror = () => reject(reader.error);
+          reader.onerror = () => reject(reader.error || new Error("File read failed"));
           reader.readAsArrayBuffer(file);
         });
 
-        setUploadProgress(99);
-        setUploadStatus("DuckDB allocating schemas & counting indexing limits...");
-        await new Promise((r) => setTimeout(r, 60));
+        setUploadStatus(`Building DuckDB schema for ${fileName}`);
+        setUploadProgress(92);
 
+        // ── 🎯 FIXED: Isolate memory buffers before registration mutations ──
+        // Slicing here prevents DuckDB from neutering the array data copy 
+        // that IndexedDB requires down the line.
         const duckdbBuffer  = rawBuffer.slice(0);
         const storageBuffer = rawBuffer.slice(0);
 
-        const meta = await registerBufferAndCreateTable(file.name, duckdbBuffer);
-        await saveCSVBuffer(file.name, storageBuffer);
+        const meta = await registerBufferAndCreateTable(fileName, duckdbBuffer);
+        await saveCSVBuffer(fileName, storageBuffer);
 
-        newFiles.push({ id: Date.now() + Math.random(), name: file.name });
-        newTables.push({ name: meta.name, rowCount: meta.rowCount, columns: meta.columns });
+        uploadedFiles.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          name: fileName,
+          tableKey,
+        });
+        uploadedTables.push(meta);
       }
 
+      setUploadStatus("Finalizing ingestion...");
       setUploadProgress(100);
-      setUploadStatus("Ingestion complete!");
-      await new Promise((r) => setTimeout(r, 350));
+      await new Promise((resolve) => setTimeout(resolve, 180));
 
       setFiles((prev) => {
-        const incomingNames = new Set(newFiles.map((f) => f.name));
-        const cleanPrev = prev.filter((f) => !incomingNames.has(typeof f === "string" ? f : f.name));
-        const merged = [...cleanPrev, ...newFiles];
-        saveState("files", merged).catch(() => {});
-        return merged;
+        const incomingKeyMap = new Map(uploadedFiles.map((file) => [file.tableKey, file]));
+
+        const retained = prev.map((item) => {
+          const itemKey = normalizeTableKey(normalizeFileDescriptor(item));
+          const replacement = incomingKeyMap.get(itemKey);
+          if (replacement) {
+            return {
+              ...item,
+              id: item.id || replacement.id,
+              name: replacement.name,
+            };
+          }
+          return item;
+        });
+
+        const existingKeys = new Set(retained.map((item) => normalizeTableKey(normalizeFileDescriptor(item))));
+        const appended = uploadedFiles
+          .filter((file) => !existingKeys.has(file.tableKey))
+          .map(({ id, name }) => ({ id, name }));
+
+        const next = [...retained, ...appended];
+        saveState("files", next).catch(() => {});
+        return next;
       });
 
       setTables((prev) => {
-        const incomingNames = new Set(newTables.map((t) => t.name));
-        const cleanPrev = prev.filter((t) => !incomingNames.has(t.name));
-        const merged = [...cleanPrev, ...newTables];
-        saveState("tables", merged).catch(() => {});
-        return merged;
+        const incomingNames = new Set(uploadedTables.map((table) => table.name));
+        const retained = prev.filter((table) => !incomingNames.has(table.name));
+        const next = [...retained, ...uploadedTables];
+        saveState("tables", next).catch(() => {});
+        return next;
       });
-
-    } catch (err) {
-      console.error("[upload] Error:", err);
-      setUploadStatus("Ingestion failed.");
-      alert(`File processing aborted: ${err.message || String(err)}`);
+    } catch (error) {
+      console.error("[handleUpload] Error:", error);
+      setUploadStatus("Upload failed.");
+      alert(`Upload failed: ${error?.message || String(error)}`);
     } finally {
       setUploadingFiles(false);
       setUploadProgress(0);
       setUploadStatus("");
     }
-  }, []);
+  }, [normalizeFileDescriptor, normalizeTableKey]);
 
-  // ─── LONG-TERM WORKSPACE PERSISTENCE HOOK ────────────────────────────────
   const persistTableChanges = useCallback(async (tableName) => {
     try {
-      const savedFiles = await loadState("files") || files;
-      
-      // ── 🎯 FIXED: Case-insensitive token lookup maps original filename case structures correctly ──
-      const match = savedFiles.find((f) => {
-        const nameStr = typeof f === "string" ? f : f.name;
-        return fileNameToTable(nameStr) === tableName.toLowerCase().trim();
+      const savedFilesState = (await loadState("files")) || [];
+      const savedFiles = Array.isArray(savedFilesState) ? savedFilesState : [];
+
+      const matchedFile = savedFiles.find((entry) => {
+        const name = normalizeFileDescriptor(entry);
+        return normalizeTableKey(name) === tableName;
       });
 
-      const fileName = match ? (typeof match === "string" ? match : match.name) : `${tableName}.csv`;
+      const fileName = matchedFile
+        ? normalizeFileDescriptor(matchedFile)
+        : `${tableName}.csv`;
+
       const updatedBuffer = await getTableCSVBuffer(tableName);
-
       await saveCSVBuffer(fileName, updatedBuffer);
-      console.log(`[Storage Link] Permanently saved updates for table: ${tableName} under file: ${fileName}`);
-    } catch (err) {
-      console.error("Context long term synchronization write failed:", err);
+    } catch (error) {
+      console.error("persistTableChanges failed:", error);
     }
-  }, [files]);
+  }, [normalizeFileDescriptor, normalizeTableKey]);
 
-  // ─── SAFE NOTEBOOK CELL QUERY RUNNER ───────────────────────────────────────
   const executeQuery = useCallback(async (cellId, sql) => {
-    let targetSql = sql.trim();
-
-    const isSelect = /^select\s/i.test(targetSql);
+    let targetSql = String(sql || "").trim();
+    const isSelect = /^select\s+/i.test(targetSql);
     const hasLimit = /\slimit\s+\d+/i.test(targetSql);
     if (isSelect && !hasLimit) {
       targetSql = `${targetSql.replace(/;+$/, "")} LIMIT 1000;`;
     }
 
-    const rows = await runQuery(targetSql); 
+    const rows = await runQuery(targetSql);
     let finalRows = rows;
-    
+
     try {
       if (
         pivotConfig &&
@@ -260,15 +306,15 @@ export function NotebookProvider({ children }) {
           );
         }
       }
-    } catch (err) {
-      console.warn("Pivot transform failed:", err);
+    } catch (error) {
+      console.warn("Pivot transform failed:", error);
     }
 
     setCells((prev) => {
-      const updated = prev.map((c) =>
-        c.id === cellId
-          ? { ...c, columns: finalRows.length > 0 ? Object.keys(finalRows[0]) : [], error: null }
-          : c
+      const updated = prev.map((cell) =>
+        cell.id === cellId
+          ? { ...cell, columns: finalRows.length > 0 ? Object.keys(finalRows[0]) : [], error: null }
+          : cell,
       );
       persistCells(updated);
       return updated;
@@ -283,8 +329,8 @@ export function NotebookProvider({ children }) {
 
   const updateCellError = useCallback((id, error, elapsed) => {
     setCells((prev) => {
-      const updated = prev.map((c) =>
-        c.id === id ? { ...c, error, elapsed, columns: [] } : c
+      const updated = prev.map((cell) =>
+        cell.id === id ? { ...cell, error, elapsed, columns: [] } : cell,
       );
       persistCells(updated);
       return updated;
@@ -293,31 +339,30 @@ export function NotebookProvider({ children }) {
 
   const addCell = useCallback((query = "") => {
     setCells((prev) => {
-      const updated = [
+      const next = [
         ...prev,
         { id: Date.now(), query, columns: [], error: null, elapsed: null },
       ];
-      persistCells(updated);
-      return updated;
+      persistCells(next);
+      return next;
     });
   }, [persistCells]);
 
   const deleteCell = useCallback((id) => {
     setCells((prev) => {
-      const updated = prev.filter((c) => c.id !== id);
-      persistCells(updated);
-      return updated;
+      const next = prev.filter((cell) => cell.id !== id);
+      persistCells(next);
+      return next;
     });
   }, [persistCells]);
 
   const duplicateCell = useCallback((id) => {
     setCells((prev) => {
-      const idx = prev.findIndex((c) => c.id === id);
-      if (idx === -1) return prev;
-      const { ...rest } = prev[idx];
-      const copy = { ...rest, id: Date.now(), error: null, columns: [] };
+      const index = prev.findIndex((cell) => cell.id === id);
+      if (index === -1) return prev;
+      const copy = { ...prev[index], id: Date.now(), error: null, columns: [] };
       const next = [...prev];
-      next.splice(idx + 1, 0, copy);
+      next.splice(index + 1, 0, copy);
       persistCells(next);
       return next;
     });
@@ -325,63 +370,66 @@ export function NotebookProvider({ children }) {
 
   const updateCellQuery = useCallback((id, query) => {
     setCells((prev) => {
-      const updated = prev.map((c) => (c.id === id ? { ...c, query } : c));
-      persistCells(updated);
-      return updated;
+      const next = prev.map((cell) => (cell.id === id ? { ...cell, query } : cell));
+      persistCells(next);
+      return next;
     });
   }, [persistCells]);
 
-  // ─── WORKSPACE FILE & TABLE DELETIONS ──────────────────────────────────────
   const deleteFile = useCallback(async (fileNameOrObj) => {
     const name = typeof fileNameOrObj === "string" ? fileNameOrObj : fileNameOrObj.name;
     await deleteCSVBuffer(name).catch(() => {});
     try {
       const tableName = fileNameToTable(name);
       await dropTable(tableName).catch(() => {});
-    } catch (err) {
-      console.error("Failed to drop table during file removal:", err);
+    } catch (error) {
+      console.error("Failed to drop table during file removal:", error);
     }
 
     setFiles((prev) => {
-      const updated = prev.filter((f) => f.name !== name);
-      saveState("files", updated).catch(() => {});
-      return updated;
+      const next = prev.filter((item) => normalizeFileDescriptor(item) !== name);
+      saveState("files", next).catch(() => {});
+      return next;
     });
 
     setTables((prev) => {
-      const updated = prev.filter((t) => t.name !== fileNameToTable(name));
-      saveState("tables", updated).catch(() => {});
-      return updated;
+      const next = prev.filter((table) => table.name !== fileNameToTable(name));
+      saveState("tables", next).catch(() => {});
+      return next;
     });
-  }, []);
+  }, [normalizeFileDescriptor]);
 
   const deleteTable = useCallback(async (tableNameOrObj) => {
     const name = typeof tableNameOrObj === "string" ? tableNameOrObj : tableNameOrObj.name;
     await dropTable(name).catch(() => {});
+
     try {
-      const savedFiles = await loadState("files");
-      if (Array.isArray(savedFiles)) {
-        const match = savedFiles.find((f) => fileNameToTable(typeof f === "string" ? f : f.name) === name);
+      const savedFilesState = await loadState("files");
+      if (Array.isArray(savedFilesState)) {
+        const match = savedFilesState.find((entry) => {
+          const fileName = normalizeFileDescriptor(entry);
+          return fileNameToTable(fileName) === name;
+        });
         if (match) {
-          const fileName = typeof match === "string" ? match : match.name;
+          const fileName = normalizeFileDescriptor(match);
           await deleteCSVBuffer(fileName).catch(() => {});
           setFiles((prev) => {
-            const updatedFiles = prev.filter((f) => f.name !== fileName);
-            saveState("files", updatedFiles).catch(() => {});
-            return updatedFiles;
+            const next = prev.filter((item) => normalizeFileDescriptor(item) !== fileName);
+            saveState("files", next).catch(() => {});
+            return next;
           });
         }
       }
-    } catch (err) {
-      console.error("Clean storage table match removal failed:", err);
+    } catch (error) {
+      console.error("Clean storage table match removal failed:", error);
     }
 
     setTables((prev) => {
-      const updated = prev.filter((t) => t.name !== name);
-      saveState("tables", updated).catch(() => {});
-      return updated;
+      const next = prev.filter((table) => table.name !== name);
+      saveState("tables", next).catch(() => {});
+      return next;
     });
-  }, []);
+  }, [normalizeFileDescriptor]);
 
   const clearAll = useCallback(async () => {
     await clearIndexedDB();
@@ -393,7 +441,7 @@ export function NotebookProvider({ children }) {
   const recordHistory = useCallback(
     ({ cellId, sql, rowCount, elapsed, error }) =>
       saveQueryHistory({ cellId, sql, rowCount, elapsed, error }).catch(() => {}),
-    []
+    [],
   );
 
   return (
@@ -405,13 +453,13 @@ export function NotebookProvider({ children }) {
         files,
         tables,
         uploadingFiles,
-        uploadProgress, 
-        uploadStatus,   
+        uploadProgress,
+        uploadStatus,
         cells,
         handleUpload,
         executeQuery,
-        runMutation, 
-        persistTableChanges, 
+        runMutation,
+        persistTableChanges,
         updateCellError,
         addCell,
         deleteCell,
@@ -420,7 +468,7 @@ export function NotebookProvider({ children }) {
         deleteFile,
         deleteTable,
         clearAll,
-        recordHistory, 
+        recordHistory,
         registerPivotConfig,
         pivotConfig,
       }}
